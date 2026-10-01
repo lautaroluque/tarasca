@@ -58,7 +58,9 @@ def render_dashboard_page() -> None:
     df = pd.DataFrame(
         [
             {
-                "date": t["date"],
+                # Supabase returns ISO strings; normalize to naive datetimes so
+                # sorting/nlargest work and dates display cleanly
+                "date": pd.to_datetime(t["date"], utc=True).tz_localize(None),
                 "description": t["description"],
                 "amount": t["amount"],
                 "currency": t["currency"],
