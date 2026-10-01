@@ -20,11 +20,12 @@ def render_transactions_page() -> None:
     col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
 
     with col1:
-        # Date range filter
+        # Date range filter: no default range, so freshly imported rows
+        # (from past months) are visible immediately
         date_range = st.date_input(
             "Rango de fechas",
-            value=(datetime.now().replace(day=1), datetime.now()),
-            help="Selecciona el rango de fechas",
+            value=(),  # type: ignore[arg-type]  # no default range: show all rows
+            help="Sin filtro por defecto. Elegí dos fechas para acotar el rango.",
         )
 
     with col2:

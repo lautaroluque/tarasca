@@ -15,23 +15,31 @@ def render_dashboard_page() -> None:
 
     # Currency switcher
     col1, col2, col3 = st.columns([1, 1, 2])
+
+    # Default to the month of the most recent transaction, so importing an
+    # older statement shows data right away instead of an empty current month
+    latest = get_transactions(limit=1)
+    if latest:
+        latest_date = datetime.fromisoformat(latest[0]["date"])
+        default_month, default_year = latest_date.month, latest_date.year
+    else:
+        default_month, default_year = datetime.now().month, datetime.now().year
+
     with col1:
         selected_currency = st.selectbox("Moneda", ["ARS", "USD", "USDT"], index=0)
 
     with col2:
         # Month selector
-        current_month = datetime.now().month
         selected_month = st.selectbox(
             "Mes",
             range(1, 13),
-            index=current_month - 1,
+            index=default_month - 1,
             format_func=lambda x: datetime(2000, x, 1).strftime("%B"),
         )
 
     with col3:
-        current_year = datetime.now().year
         selected_year = st.number_input(
-            "Año", min_value=2000, max_value=2100, value=current_year
+            "Año", min_value=2000, max_value=2100, value=default_year
         )
 
     # Get transactions for selected month/year

@@ -50,13 +50,26 @@ Build a personal financial tracker/planning app (Streamlit + Supabase) that inge
    against existing DB rows over the batch date range on
    (date UTC-naive, description, amount, currency, account, comprobante);
    already-imported rows are skipped and reported ("X ya existían y se omitieron")
+6. **Post-deploy round 2 (silent import / invisible records)**:
+   - `st.rerun()` after import wiped the success message → flash messages now
+     stored in `st.session_state["import_flash"]` and rendered on next run
+   - default date filters hid imported Aug/Sep data (transactions page defaulted
+     to current month, dashboard to current month) → transactions filter defaults
+     to no range; dashboard defaults to the month of the latest transaction
+   - `nlargest` on string dates crashed dashboard → dates normalized to
+     datetime64 when building the DataFrame (commit 39e1f66)
+   - **DB cleanup executed** (user approved): 91 legacy rows from old-parser
+     imports deleted, 2 missing Fiwind rows backfilled → table now has exactly
+     74 correct rows (68 Galicia + 6 Fiwind), 0 duplicate keys, 0 sign issues.
+     Tools: `scripts/cleanup_imports.py` (idempotent, dry-run by default),
+     `scripts/verify_db.py` (read-only sanity check)
 
 ## Verification Results
 
 - Tests: 28 passed (`uv run pytest`)
 - Lint (ruff): all checks passed (src/, tests/, scripts/)
 - Typecheck (mypy): no issues in 15 source files
-- Manual: `scripts/diagnose.py` parses both samples cleanly (0 duplicates)
+- DB verified: 74 rows, 0 duplicates, 0 sign inconsistencies
 
 ## Key Discoveries
 
@@ -78,8 +91,5 @@ Build a personal financial tracker/planning app (Streamlit + Supabase) that inge
 
 ## Next Steps
 
-1. **User: run `supabase_migration_002_movement_types.sql` in Supabase SQL
-   Editor** (required — otherwise imports fail with missing column / constraint)
-2. Push changes, redeploy, re-import both sample files and verify the
-   Transacciones/Dashboard pages
-3. Optional: user testing on mobile/tablet
+1. Push latest commits and let Streamlit Community Cloud redeploy
+2. User testing on mobile/tablet; import another statement period when available

@@ -10,6 +10,11 @@ from src.core.ingestion import parse_file
 from src.core.templates import list_templates
 
 
+def _set_flash(type_: str, message: str) -> None:
+    """Store a one-shot message that survives the st.rerun() after import."""
+    st.session_state["import_flash"] = {"type": type_, "message": message}
+
+
 def _dedupe_key(row: dict) -> tuple:
     """Key that identifies a transaction already present in the database.
 
@@ -115,16 +120,17 @@ def _import_transactions(transactions: list[dict]) -> None:
         skipped = len(db_transactions) - len(new_transactions)
 
         if not new_transactions:
-            st.info(
+            _set_flash(
+                "info",
                 f"Las **{len(db_transactions)}** transacciones ya están "
-                "importadas; no hay nada nuevo que agregar."
+                "importadas; no hay nada nuevo que agregar.",
             )
         else:
             count = create_transactions_bulk(new_transactions)
             message = f"✅ Se importaron **{count}** transacciones exitosamente"
             if skipped:
                 message += f" ({skipped} ya existían y se omitieron)"
-            st.success(message)
+            _set_flash("success", message)
 
         # Clear preview state so it can't be imported twice
         st.session_state.pop("parsed_transactions", None)
@@ -134,6 +140,11 @@ def _import_transactions(transactions: list[dict]) -> None:
 def render_upload_page() -> None:
     """Render the upload page."""
     st.title("📤 Importar Extractos")
+
+    # Message from the previous run's import (st.rerun wipes in-run messages)
+    flash = st.session_state.pop("import_flash", None)
+    if flash:
+        getattr(st, flash["type"])(flash["message"])
 
     st.markdown("Sube tus extractos bancarios para importar transacciones automáticamente.")
 
