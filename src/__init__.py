@@ -1,0 +1,1 @@
+"""Tarasca - Personal Financial Tracker."""
