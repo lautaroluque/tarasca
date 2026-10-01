@@ -6,7 +6,8 @@ Personal financial tracker/planning app that ingests bank/credit card extracts, 
 
 - **Multi-bank import**: Upload extracts from Fiwind (Excel) and Galicia Mastercard (PDF)
 - **Automatic categorization**: Rule-based engine with Spanish keywords (10 categories)
-- **Multi-currency**: Support for ARS and USD with currency switcher
+- **Movement types**: Every transaction is typed as ingreso, gasto, or transferencia (card payments, conversions between balances, refunds)
+- **Multi-currency**: ARS, USD and crypto balances (USDT, USDC...) with currency switcher
 - **Flexible metadata**: Stores bank-specific fields (Tipo, Comprobante, etc.)
 - **Dashboard**: Spending trends, category breakdowns, account balances
 - **Budget tracking**: Create monthly budgets and track progress
@@ -34,6 +35,7 @@ tarasca/
 │   │   └── budgets.py      # Budget tracking
 │   ├── core/               # Business logic
 │   │   ├── ingestion.py    # File parsing (Excel/CSV/PDF)
+│   │   ├── movements.py    # Movement type classification
 │   │   ├── categorization.py # Rule-based categorization
 │   │   ├── database.py     # Supabase CRUD operations
 │   │   ├── models.py       # Data models
@@ -66,7 +68,9 @@ uv sync
 ### Configuration
 
 1. Create a Supabase project at [supabase.com](https://supabase.com)
-2. Run the SQL schema to create tables (see Supabase dashboard)
+2. Run the SQL schema to create tables (`supabase_schema.sql` in the SQL Editor).
+   If you created the tables with an older schema, run
+   `supabase_migration_002_movement_types.sql` instead to upgrade in place.
 3. Create `.streamlit/secrets.toml`:
 
 ```toml

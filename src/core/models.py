@@ -29,8 +29,9 @@ class TransactionBase(BaseModel):
 
     date: datetime
     description: str
-    amount: float
-    currency: str = Field(default="ARS", pattern="^(ARS|USD)$")
+    amount: float  # signed: positive = money in, negative = money out
+    currency: str = Field(default="ARS")  # ARS, USD, USDT, USDC...
+    movement_type: str = Field(default="gasto", pattern="^(ingreso|gasto|transferencia)$")
     account: str
     category_id: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -58,6 +59,7 @@ class TransactionUpdate(BaseModel):
     description: str | None = None
     amount: float | None = None
     currency: str | None = None
+    movement_type: str | None = None
     account: str | None = None
     category_id: UUID | None = None
     metadata: dict[str, Any] | None = None

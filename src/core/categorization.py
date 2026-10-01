@@ -289,7 +289,6 @@ DEFAULT_CATEGORIES = [
         "keywords": [
             "sueldo",
             "salario",
-            "pago",
             "transferencia recibida",
             "deposito",
             "reembolso",
@@ -317,6 +316,9 @@ DEFAULT_CATEGORIES = [
             "pago",
             "debito",
             "credito",
+            "conversion",
+            "conversión",
+            "retiro",
             "fiwind",
             "mercado pago",
             "uala",

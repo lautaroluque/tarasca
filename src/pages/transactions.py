@@ -17,7 +17,7 @@ def render_transactions_page() -> None:
     st.title("📋 Transacciones")
 
     # Filters
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
 
     with col1:
         # Date range filter
@@ -40,8 +40,18 @@ def render_transactions_page() -> None:
 
     with col4:
         # Currency filter
-        currencies = ["Todas", "ARS", "USD"]
+        currencies = ["Todas", "ARS", "USD", "USDT"]
         selected_currency = st.selectbox("Moneda", currencies)
+
+    with col5:
+        # Movement type filter
+        movement_labels = {
+            "Todos": None,
+            "Gasto": "gasto",
+            "Ingreso": "ingreso",
+            "Transferencia": "transferencia",
+        }
+        selected_movement = st.selectbox("Tipo", list(movement_labels))
 
     # Get transactions
     try:
@@ -63,11 +73,13 @@ def render_transactions_page() -> None:
 
     account = None if selected_account == "Todas" else selected_account
     currency = None if selected_currency == "Todas" else selected_currency
+    movement_type = movement_labels[selected_movement]
 
     transactions = get_transactions(
         category_id=category_id,
         account=account,
         currency=currency,
+        movement_type=movement_type,
         start_date=start_date,
         end_date=end_date,
         limit=1000,
@@ -79,10 +91,16 @@ def render_transactions_page() -> None:
 
     st.caption(f"Mostrando {len(transactions)} transacciones")
 
+    movement_types = {
+        "gasto": "Gasto",
+        "ingreso": "Ingreso",
+        "transferencia": "Transferencia",
+    }
+
     # Display transactions
     for transaction in transactions:
         with st.container():
-            col1, col2, col3, col4, col5 = st.columns([2, 3, 2, 2, 1])
+            col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1.5, 1.5, 2, 1])
 
             with col1:
                 st.write(f"**{transaction['date'][:10]}**")
@@ -103,6 +121,31 @@ def render_transactions_page() -> None:
                 st.write(f":{amount_color}[**{amount:,.2f} {transaction['currency']}**]")
 
             with col4:
+                # Movement type selector (ingreso / gasto / transferencia)
+                current_type = transaction.get("movement_type", "gasto")
+                type_labels = list(movement_types.values())
+                new_type = st.selectbox(
+                    "Tipo",
+                    type_labels,
+                    index=type_labels.index(movement_types[current_type])
+                    if current_type in movement_types
+                    else 0,
+                    key=f"type_{transaction['id']}",
+                )
+
+                if movement_types[current_type] != new_type:
+                    new_type_value = next(
+                        k for k, v in movement_types.items() if v == new_type
+                    )
+                    try:
+                        update_transaction(
+                            transaction["id"], {"movement_type": new_type_value}
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+
+            with col5:
                 # Category selector
                 category_names = [c["name"] for c in categories]
                 current_category = "Otros"
@@ -140,7 +183,7 @@ def render_transactions_page() -> None:
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
 
-            with col5:
+            with col6:
                 if st.button("🗑️", key=f"del_{transaction['id']}", help="Eliminar"):
                     try:
                         delete_transaction(transaction["id"])

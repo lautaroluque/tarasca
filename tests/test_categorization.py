@@ -1,9 +1,9 @@
 """Tests for categorization module."""
 
 from src.core.categorization import (
+    add_custom_keyword,
     categorize_transaction,
     get_default_categories,
-    add_custom_keyword,
     remove_custom_keyword,
 )
 

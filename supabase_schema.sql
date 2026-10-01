@@ -17,8 +17,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     date TIMESTAMP WITH TIME ZONE NOT NULL,
     description TEXT NOT NULL,
-    amount DOUBLE PRECISION NOT NULL,
-    currency TEXT NOT NULL DEFAULT 'ARS' CHECK (currency IN ('ARS', 'USD')),
+    amount DOUBLE PRECISION NOT NULL,  -- signed: positive = money in, negative = money out
+    currency TEXT NOT NULL DEFAULT 'ARS',  -- ARS, USD, USDT, USDC...
+    movement_type TEXT NOT NULL DEFAULT 'gasto' CHECK (movement_type IN ('ingreso', 'gasto', 'transferencia')),
     account TEXT NOT NULL,
     category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
     metadata JSONB DEFAULT '{}',

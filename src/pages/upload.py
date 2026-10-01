@@ -1,11 +1,36 @@
 """Upload page for importing bank extracts."""
 
+from datetime import datetime, timezone
+
 import streamlit as st
 
 from src.core.categorization import categorize_transaction, get_default_categories
-from src.core.database import create_transactions_bulk, get_categories
+from src.core.database import create_transactions_bulk, get_categories, get_transactions
 from src.core.ingestion import parse_file
 from src.core.templates import list_templates
+
+
+def _dedupe_key(row: dict) -> tuple:
+    """Key that identifies a transaction already present in the database.
+
+    Accepts both parsed rows (naive datetime) and rows returned by Supabase
+    (ISO string, possibly timezone-aware) and normalizes them to UTC-naive.
+    """
+    date = row["date"]
+    if isinstance(date, str):
+        date = datetime.fromisoformat(date)
+    if date.tzinfo is not None:
+        date = date.astimezone(timezone.utc).replace(tzinfo=None)
+
+    metadata = row.get("metadata") or {}
+    return (
+        date,
+        row["description"],
+        round(float(row["amount"]), 2),
+        row["currency"],
+        row.get("account", ""),
+        metadata.get("comprobante", ""),
+    )
 
 
 def _parse_and_store(file_content: bytes, template_name: str, file_extension: str) -> None:
@@ -41,6 +66,7 @@ def _render_preview(transactions: list[dict]) -> None:
                 "Descripción": t["description"],
                 "Monto": f"{t['amount']:,.2f}",
                 "Moneda": t["currency"],
+                "Tipo": t.get("movement_type", "gasto"),
                 "Categoría": t["category_name"],
                 "Metadatos": str(t.get("metadata", {})),
             }
@@ -70,14 +96,35 @@ def _import_transactions(transactions: list[dict]) -> None:
                     "description": t["description"],
                     "amount": t["amount"],
                     "currency": t["currency"],
+                    "movement_type": t.get("movement_type", "gasto"),
                     "account": t["account"],
                     "category_id": category_id,
                     "metadata": t.get("metadata", {}),
                 }
             )
 
-        count = create_transactions_bulk(db_transactions)
-        st.success(f"✅ Se importaron **{count}** transacciones exitosamente")
+        # Skip transactions already in the database (re-importing the same file)
+        dates = [t["date"] for t in transactions]
+        existing = get_transactions(
+            start_date=min(dates),
+            end_date=max(dates),
+            limit=10000,
+        )
+        existing_keys = {_dedupe_key(t) for t in existing}
+        new_transactions = [t for t in db_transactions if _dedupe_key(t) not in existing_keys]
+        skipped = len(db_transactions) - len(new_transactions)
+
+        if not new_transactions:
+            st.info(
+                f"Las **{len(db_transactions)}** transacciones ya están "
+                "importadas; no hay nada nuevo que agregar."
+            )
+        else:
+            count = create_transactions_bulk(new_transactions)
+            message = f"✅ Se importaron **{count}** transacciones exitosamente"
+            if skipped:
+                message += f" ({skipped} ya existían y se omitieron)"
+            st.success(message)
 
         # Clear preview state so it can't be imported twice
         st.session_state.pop("parsed_transactions", None)
@@ -166,4 +213,10 @@ def render_upload_page() -> None:
 - Sección: "DETALLE DEL CONSUMO"
 - Columnas: Fecha, Referencia, Comprobante, Pesos, Dólares
 - Formato de números: argentino (1.234,56)
+
+### Tipos de movimiento
+Cada transacción se clasifica automáticamente como **Ingreso**, **Gasto** o
+**Transferencia** (pagos de tarjeta, conversiones entre saldos, retiros).
+Los montos se guardan con signo: positivo = entra dinero, negativo = sale dinero.
+Podés corregir el tipo desde la página de Transacciones.
 """)

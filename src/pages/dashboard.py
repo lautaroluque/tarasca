@@ -16,7 +16,7 @@ def render_dashboard_page() -> None:
     # Currency switcher
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        selected_currency = st.selectbox("Moneda", ["ARS", "USD"], index=0)
+        selected_currency = st.selectbox("Moneda", ["ARS", "USD", "USDT"], index=0)
 
     with col2:
         # Month selector
@@ -62,6 +62,7 @@ def render_dashboard_page() -> None:
                 "description": t["description"],
                 "amount": t["amount"],
                 "currency": t["currency"],
+                "movement_type": t.get("movement_type", "gasto"),
                 "category": next(
                     (c["name"] for c in categories if c["id"] == t.get("category_id")),
                     "Otros",
@@ -78,20 +79,24 @@ def render_dashboard_page() -> None:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        total_income = df[df["amount"] > 0]["amount"].sum()
+        total_income = df.loc[df["movement_type"] == "ingreso", "amount"].sum()
         st.metric(f"Ingresos ({selected_currency})", f"{total_income:,.2f}")
 
     with col2:
-        total_expenses = df[df["amount"] < 0]["amount"].sum()
-        st.metric(f"Gastos ({selected_currency})", f"{total_expenses:,.2f}")
+        # Gastos are stored as negative amounts (money out)
+        total_expenses = df.loc[df["movement_type"] == "gasto", "amount"].sum()
+        st.metric(f"Gastos ({selected_currency})", f"{abs(total_expenses):,.2f}")
 
     with col3:
         net = total_income + total_expenses
         st.metric(f"Balance ({selected_currency})", f"{net:,.2f}")
 
     with col4:
-        transaction_count = len(df)
-        st.metric("Transacciones", transaction_count)
+        transfers = df[df["movement_type"] == "transferencia"]
+        st.metric("Transferencias", len(transfers))
+        if not transfers.empty:
+            moved = transfers["amount"].abs().sum()
+            st.caption(f"Movido: {moved:,.2f} {selected_currency}")
 
     # Charts
     st.markdown("### Visualizaciones")
@@ -99,9 +104,9 @@ def render_dashboard_page() -> None:
     col1, col2 = st.columns(2)
 
     with col1:
-        # Spending by category pie chart
+        # Spending by category pie chart (only real spending, not transfers)
         expenses_by_category = (
-            df[df["amount"] < 0].groupby("category")["amount"].sum().abs()
+            df[df["movement_type"] == "gasto"].groupby("category")["amount"].sum().abs()
         )
 
         if not expenses_by_category.empty:
@@ -117,9 +122,10 @@ def render_dashboard_page() -> None:
             st.info("No hay gastos para mostrar.")
 
     with col2:
-        # Monthly trend line chart
+        # Monthly trend line chart (ingresos + gastos; transfers excluded)
         df["day"] = pd.to_datetime(df["date"]).dt.day
-        daily_balance = df.groupby("day")["amount"].sum().cumsum()
+        flows = df[df["movement_type"].isin(["ingreso", "gasto"])]
+        daily_balance = flows.groupby("day")["amount"].sum().cumsum()
 
         if not daily_balance.empty:
             fig = px.line(
@@ -145,7 +151,15 @@ def render_dashboard_page() -> None:
     st.markdown("### Últimas Transacciones")
 
     recent = df.nlargest(10, "date")[
-        ["date", "description", "amount", "currency", "category", "account"]
+        [
+            "date",
+            "description",
+            "amount",
+            "currency",
+            "movement_type",
+            "category",
+            "account",
+        ]
     ]
 
     st.dataframe(recent, use_container_width=True, hide_index=True)

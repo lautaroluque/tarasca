@@ -60,6 +60,7 @@ def render_budgets_page() -> None:
                     "category_id": t.get("category_id"),
                     "amount": t["amount"],
                     "currency": t["currency"],
+                    "movement_type": t.get("movement_type", "gasto"),
                 }
                 for t in transactions
             ]
@@ -69,9 +70,12 @@ def render_budgets_page() -> None:
         category_map = {c["id"]: c["name"] for c in categories}
         df["category"] = df["category_id"].map(category_map).fillna("Otros")
 
-        # Sum expenses by category (only negative amounts)
+        # Sum real spending by category (excludes income and transfers)
         expenses_by_category = (
-            df[df["amount"] < 0].groupby("category")["amount"].sum().abs()
+            df[df["movement_type"] == "gasto"]
+            .groupby("category")["amount"]
+            .sum()
+            .abs()
         )
     else:
         expenses_by_category = pd.Series(dtype=float)

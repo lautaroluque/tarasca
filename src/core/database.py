@@ -82,6 +82,7 @@ def get_transactions(
     category_id: UUID | None = None,
     account: str | None = None,
     currency: str | None = None,
+    movement_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> list[dict[str, Any]]:
@@ -95,6 +96,8 @@ def get_transactions(
         query = query.eq("account", account)
     if currency:
         query = query.eq("currency", currency)
+    if movement_type:
+        query = query.eq("movement_type", movement_type)
     if start_date:
         query = query.gte("date", start_date.isoformat())
     if end_date:
