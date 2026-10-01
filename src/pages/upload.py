@@ -3,12 +3,12 @@
 import streamlit as st
 
 from src.core.categorization import categorize_transaction, get_default_categories
-from src.core.database import create_transactions_bulk, get_session
+from src.core.database import create_transactions_bulk, get_categories
 from src.core.ingestion import parse_file
 from src.core.templates import list_templates
 
 
-def render_upload_page():
+def render_upload_page() -> None:
     """Render the upload page."""
     st.title("📤 Importar Extractos")
 
@@ -46,7 +46,9 @@ def render_upload_page():
 
                 with st.spinner("Procesando archivo..."):
                     transactions = parse_file(
-                        file_content, selected_template.lower().replace(" ", "_"), file_extension
+                        file_content,
+                        selected_template.lower().replace(" ", "_"),
+                        file_extension,
                     )
 
                 if not transactions:
@@ -59,10 +61,7 @@ def render_upload_page():
                     category_name = categorize_transaction(
                         transaction["description"], categories
                     )
-                    if category_name:
-                        transaction["category_name"] = category_name
-                    else:
-                        transaction["category_name"] = "Otros"
+                    transaction["category_name"] = category_name or "Otros"
 
                 # Show preview
                 st.success(f"Se encontraron **{len(transactions)}** transacciones")
@@ -91,30 +90,32 @@ def render_upload_page():
                 # Import button
                 if st.button("💾 Importar a la base de datos", type="primary"):
                     with st.spinner("Importando transacciones..."):
-                        session = next(get_session())
-                        try:
-                            # Prepare data for database
-                            db_transactions = []
-                            for t in transactions:
-                                db_transactions.append(
-                                    {
-                                        "date": t["date"],
-                                        "description": t["description"],
-                                        "amount": t["amount"],
-                                        "currency": t["currency"],
-                                        "account": t["account"],
-                                        "metadata": t.get("metadata", {}),
-                                    }
-                                )
+                        # Get categories from database to map names to IDs
+                        db_categories = get_categories()
+                        category_name_to_id = {c["name"]: c["id"] for c in db_categories}
 
-                            count = create_transactions_bulk(session, db_transactions)
-                            st.success(
-                                f"✅ Se importaron **{count}** transacciones exitosamente"
+                        # Prepare data for database
+                        db_transactions = []
+                        for t in transactions:
+                            category_name = t.get("category_name", "Otros")
+                            category_id = category_name_to_id.get(category_name)
+
+                            db_transactions.append(
+                                {
+                                    "date": t["date"].isoformat(),
+                                    "description": t["description"],
+                                    "amount": t["amount"],
+                                    "currency": t["currency"],
+                                    "account": t["account"],
+                                    "category_id": category_id,
+                                    "metadata": t.get("metadata", {}),
+                                }
                             )
-                        except Exception as e:
-                            st.error(f"Error al importar: {str(e)}")
-                        finally:
-                            session.close()
+
+                        count = create_transactions_bulk(db_transactions)
+                        st.success(
+                            f"✅ Se importaron **{count}** transacciones exitosamente"
+                        )
 
             except Exception as e:
                 st.error(f"Error al procesar el archivo: {str(e)}")

@@ -6,10 +6,10 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.core.database import get_categories, get_session, get_transactions
+from src.core.database import get_categories, get_transactions
 
 
-def render_dashboard_page():
+def render_dashboard_page() -> None:
     """Render the dashboard page."""
     st.title("📊 Dashboard")
 
@@ -30,11 +30,12 @@ def render_dashboard_page():
 
     with col3:
         current_year = datetime.now().year
-        selected_year = st.number_input("Año", min_value=2000, max_value=2100, value=current_year)
+        selected_year = st.number_input(
+            "Año", min_value=2000, max_value=2100, value=current_year
+        )
 
     # Get transactions for selected month/year
-    session = next(get_session())
-    categories = get_categories(session)
+    categories = get_categories()
 
     start_date = datetime(selected_year, selected_month, 1)
     if selected_month == 12:
@@ -43,14 +44,11 @@ def render_dashboard_page():
         end_date = datetime(selected_year, selected_month + 1, 1)
 
     transactions = get_transactions(
-        session,
         currency=selected_currency,
         start_date=start_date,
         end_date=end_date,
         limit=10000,
     )
-
-    session.close()
 
     if not transactions:
         st.info("No hay transacciones para el período seleccionado.")
@@ -60,14 +58,15 @@ def render_dashboard_page():
     df = pd.DataFrame(
         [
             {
-                "date": t.date,
-                "description": t.description,
-                "amount": t.amount,
-                "currency": t.currency,
+                "date": t["date"],
+                "description": t["description"],
+                "amount": t["amount"],
+                "currency": t["currency"],
                 "category": next(
-                    (c.name for c in categories if c.id == t.category_id), "Otros"
+                    (c["name"] for c in categories if c["id"] == t.get("category_id")),
+                    "Otros",
                 ),
-                "account": t.account,
+                "account": t["account"],
             }
             for t in transactions
         ]
@@ -101,7 +100,9 @@ def render_dashboard_page():
 
     with col1:
         # Spending by category pie chart
-        expenses_by_category = df[df["amount"] < 0].groupby("category")["amount"].sum().abs()
+        expenses_by_category = (
+            df[df["amount"] < 0].groupby("category")["amount"].sum().abs()
+        )
 
         if not expenses_by_category.empty:
             fig = px.pie(
@@ -117,7 +118,7 @@ def render_dashboard_page():
 
     with col2:
         # Monthly trend line chart
-        df["day"] = df["date"].dt.day
+        df["day"] = pd.to_datetime(df["date"]).dt.day
         daily_balance = df.groupby("day")["amount"].sum().cumsum()
 
         if not daily_balance.empty:
@@ -146,6 +147,5 @@ def render_dashboard_page():
     recent = df.nlargest(10, "date")[
         ["date", "description", "amount", "currency", "category", "account"]
     ]
-    recent["date"] = recent["date"].dt.strftime("%d/%m/%Y")
 
     st.dataframe(recent, use_container_width=True, hide_index=True)

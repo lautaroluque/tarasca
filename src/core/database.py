@@ -1,76 +1,82 @@
-"""Database connection and CRUD operations for Tarasca."""
+"""Database connection and CRUD operations for Tarasca using Supabase."""
 
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from dotenv import load_dotenv
-from sqlmodel import Session, SQLModel, create_engine, select
-from sqlmodel.pool import StaticPool
+from supabase import Client, create_client
 
 load_dotenv()
 
-
-def get_engine():
-    """Create database engine."""
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable not set")
-
-    # For PostgreSQL (Supabase)
-    if database_url.startswith("postgresql"):
-        return create_engine(database_url, pool_pre_ping=True)
-
-    # For SQLite (local development)
-    connect_args = {"check_same_thread": False}
-    return create_engine(
-        database_url,
-        connect_args=connect_args,
-        poolclass=StaticPool,
-    )
+_supabase_client: Client | None = None
 
 
-def create_db_and_tables():
-    """Create database tables."""
-    engine = get_engine()
-    SQLModel.metadata.create_all(engine)
+def get_supabase_client() -> Client:
+    """Get or create Supabase client."""
+    global _supabase_client
+
+    if _supabase_client is not None:
+        return _supabase_client
+
+    # Try to get secrets from Streamlit first, then environment variables
+    try:
+        import streamlit as st
+
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["secret_key"]
+    except (ImportError, KeyError):
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SECRET_KEY")
+
+    if not url or not key:
+        raise ValueError(
+            "Supabase credentials not found. Set SUPABASE_URL and SUPABASE_SECRET_KEY "
+            "environment variables or configure Streamlit secrets."
+        )
+
+    _supabase_client = create_client(url, key)
+    return _supabase_client
 
 
-def get_session():
-    """Get database session."""
-    engine = get_engine()
-    with Session(engine) as session:
-        yield session
+def create_db_and_tables() -> None:
+    """Create database tables.
+
+    Note: This is handled by Supabase migrations. This function is a no-op
+    when using Supabase.
+    """
+    pass
 
 
 # Category CRUD
 
 
-def get_categories(session: Session) -> list[Any]:
+def get_categories() -> list[dict[str, Any]]:
     """Get all categories."""
-    return list(session.exec(select(Category)).all())
+    client = get_supabase_client()
+    response = client.table("categories").select("*").execute()
+    return [cast(dict[str, Any], item) for item in response.data]
 
 
-def get_category_by_id(session: Session, category_id: UUID) -> Any | None:
+def get_category_by_id(category_id: UUID) -> dict[str, Any] | None:
     """Get category by ID."""
-    return session.get(Category, category_id)
+    client = get_supabase_client()
+    response = client.table("categories").select("*").eq("id", str(category_id)).execute()
+    return cast(dict[str, Any], response.data[0]) if response.data else None
 
 
-def create_category(session: Session, category_data: dict) -> Any:
+def create_category(category_data: dict) -> dict[str, Any]:
     """Create a new category."""
-    category = Category(**category_data)
-    session.add(category)
-    session.commit()
-    session.refresh(category)
-    return category
+    client = get_supabase_client()
+    response = client.table("categories").insert(category_data).execute()
+    return cast(dict[str, Any], response.data[0])
 
 
 # Transaction CRUD
 
 
 def get_transactions(
-    session: Session,
     skip: int = 0,
     limit: int = 100,
     category_id: UUID | None = None,
@@ -78,136 +84,121 @@ def get_transactions(
     currency: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-) -> list[Any]:
+) -> list[dict[str, Any]]:
     """Get transactions with optional filters."""
-    statement = select(Transaction)
+    client = get_supabase_client()
+    query = client.table("transactions").select("*")
 
     if category_id:
-        statement = statement.where(Transaction.category_id == category_id)
+        query = query.eq("category_id", str(category_id))
     if account:
-        statement = statement.where(Transaction.account == account)
+        query = query.eq("account", account)
     if currency:
-        statement = statement.where(Transaction.currency == currency)
+        query = query.eq("currency", currency)
     if start_date:
-        statement = statement.where(Transaction.date >= start_date)
+        query = query.gte("date", start_date.isoformat())
     if end_date:
-        statement = statement.where(Transaction.date <= end_date)
+        query = query.lte("date", end_date.isoformat())
 
-    statement = statement.order_by(Transaction.date.desc()).offset(skip).limit(limit)  # type: ignore[attr-defined]
-    return list(session.exec(statement).all())
+    response = query.order("date", desc=True).range(skip, skip + limit - 1).execute()
+    return [cast(dict[str, Any], item) for item in response.data]
 
 
-def get_transaction_by_id(session: Session, transaction_id: UUID) -> Any | None:
+def get_transaction_by_id(transaction_id: UUID) -> dict[str, Any] | None:
     """Get transaction by ID."""
-    return session.get(Transaction, transaction_id)
+    client = get_supabase_client()
+    response = (
+        client.table("transactions").select("*").eq("id", str(transaction_id)).execute()
+    )
+    return cast(dict[str, Any], response.data[0]) if response.data else None
 
 
-def create_transaction(session: Session, transaction_data: dict) -> Any:
+def create_transaction(transaction_data: dict) -> dict[str, Any]:
     """Create a new transaction."""
-    transaction = Transaction(**transaction_data)
-    session.add(transaction)
-    session.commit()
-    session.refresh(transaction)
-    return transaction
+    client = get_supabase_client()
+    response = client.table("transactions").insert(transaction_data).execute()
+    return cast(dict[str, Any], response.data[0])
 
 
-def create_transactions_bulk(session: Session, transactions_data: list[dict]) -> int:
+def create_transactions_bulk(transactions_data: list[dict]) -> int:
     """Create multiple transactions in bulk."""
-    transactions = [Transaction(**data) for data in transactions_data]
-    session.add_all(transactions)
-    session.commit()
-    return len(transactions)
+    client = get_supabase_client()
+    response = client.table("transactions").insert(transactions_data).execute()
+    return len(response.data)
 
 
 def update_transaction(
-    session: Session, transaction_id: UUID, update_data: dict
-) -> Any | None:
+    transaction_id: UUID, update_data: dict
+) -> dict[str, Any] | None:
     """Update an existing transaction."""
-    transaction = session.get(Transaction, transaction_id)
-    if not transaction:
-        return None
-
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(transaction, key, value)
-
-    transaction.updated_at = datetime.utcnow()
-    session.add(transaction)
-    session.commit()
-    session.refresh(transaction)
-    return transaction
+    client = get_supabase_client()
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+    response = (
+        client.table("transactions")
+        .update(update_data)
+        .eq("id", str(transaction_id))
+        .execute()
+    )
+    return cast(dict[str, Any], response.data[0]) if response.data else None
 
 
-def delete_transaction(session: Session, transaction_id: UUID) -> bool:
+def delete_transaction(transaction_id: UUID) -> bool:
     """Delete a transaction."""
-    transaction = session.get(Transaction, transaction_id)
-    if not transaction:
-        return False
-
-    session.delete(transaction)
-    session.commit()
-    return True
+    client = get_supabase_client()
+    response = (
+        client.table("transactions").delete().eq("id", str(transaction_id)).execute()
+    )
+    return len(response.data) > 0
 
 
 # Budget CRUD
 
 
 def get_budgets(
-    session: Session,
     month: int | None = None,
     year: int | None = None,
-) -> list[Any]:
+) -> list[dict[str, Any]]:
     """Get budgets with optional filters."""
-    statement = select(Budget)
+    client = get_supabase_client()
+    query = client.table("budgets").select("*")
 
     if month:
-        statement = statement.where(Budget.month == month)
+        query = query.eq("month", month)
     if year:
-        statement = statement.where(Budget.year == year)
+        query = query.eq("year", year)
 
-    return list(session.exec(statement).all())
+    response = query.execute()
+    return [cast(dict[str, Any], item) for item in response.data]
 
 
-def get_budget_by_id(session: Session, budget_id: UUID) -> Any | None:
+def get_budget_by_id(budget_id: UUID) -> dict[str, Any] | None:
     """Get budget by ID."""
-    return session.get(Budget, budget_id)
+    client = get_supabase_client()
+    response = client.table("budgets").select("*").eq("id", str(budget_id)).execute()
+    return cast(dict[str, Any], response.data[0]) if response.data else None
 
 
-def create_budget(session: Session, budget_data: dict) -> Any:
+def create_budget(budget_data: dict) -> dict[str, Any]:
     """Create a new budget."""
-    budget = Budget(**budget_data)
-    session.add(budget)
-    session.commit()
-    session.refresh(budget)
-    return budget
+    client = get_supabase_client()
+    response = client.table("budgets").insert(budget_data).execute()
+    return cast(dict[str, Any], response.data[0])
 
 
-def update_budget(session: Session, budget_id: UUID, update_data: dict) -> Any | None:
+def update_budget(budget_id: UUID, update_data: dict) -> dict[str, Any] | None:
     """Update an existing budget."""
-    budget = session.get(Budget, budget_id)
-    if not budget:
-        return None
-
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(budget, key, value)
-
-    session.add(budget)
-    session.commit()
-    session.refresh(budget)
-    return budget
+    client = get_supabase_client()
+    response = (
+        client.table("budgets")
+        .update(update_data)
+        .eq("id", str(budget_id))
+        .execute()
+    )
+    return cast(dict[str, Any], response.data[0]) if response.data else None
 
 
-def delete_budget(session: Session, budget_id: UUID) -> bool:
+def delete_budget(budget_id: UUID) -> bool:
     """Delete a budget."""
-    budget = session.get(Budget, budget_id)
-    if not budget:
-        return False
-
-    session.delete(budget)
-    session.commit()
-    return True
-
-
-# Import models to avoid circular imports
-from src.core.models import Budget, Category, Transaction  # noqa: E402
+    client = get_supabase_client()
+    response = client.table("budgets").delete().eq("id", str(budget_id)).execute()
+    return len(response.data) > 0
