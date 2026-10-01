@@ -162,9 +162,12 @@ def parse_pdf(file_content: bytes, template: BankTemplate) -> list[dict[str, Any
                 # Parse transaction lines
                 # Format: DD-Mon-YY DESCRIPTION COMPROBANTE AMOUNT
                 # Example: 05-Sep-26 NETFLIX.COM (USA,ARS, 30797,00) 00192 20,43
-                transaction = _parse_pdf_line(line, template, current_section)
-                if transaction:
-                    transactions.append(transaction)
+                parsed = _parse_pdf_line(line, template, current_section)
+                if parsed:
+                    if isinstance(parsed, list):
+                        transactions.extend(parsed)
+                    else:
+                        transactions.append(parsed)
 
     return transactions
 
