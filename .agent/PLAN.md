@@ -1,274 +1,148 @@
-# Implementation Plan: Personal Financial Tracker
+# Implementation Plan: Phone Uploads + Real-Time Card Expenses
 
 ## Goal
 
-Build a personal financial tracker/planning web app that ingests bank/credit card extracts (CSV, PDF, Excel), automatically parses and categorizes transactions, and provides spending dashboards. Must be accessible from any device via a free cloud platform. UI language: Spanish.
+Add two ingestion channels to Tarasca without changing the existing extract-import flow:
+
+1. **Phone uploads**: share a bank statement file from Android's share sheet directly into the app.
+2. **Near-real-time expenses**: ingest credit-card-use notification emails automatically (polled every ~5 min), so daily spending is tracked between monthly statement imports — without duplicating rows when the statement arrives.
 
 ## Scope
 
 ### In Scope
 
-- Excel (.xlsx), CSV, and PDF file upload and parsing
-- Bank-specific template system for mapping columns/fields
-- Pre-configured templates for **Fiwind** (Excel) and **Galicia Mastercard** (PDF)
-- Multi-currency support (ARS and USD) with currency switcher in UI
-- Rule-based transaction categorization (keyword matching, Spanish categories)
-- PostgreSQL database persistence (Supabase)
-- Streamlit web UI with multi-page navigation (all in Spanish)
-- Dashboard with spending visualizations (charts, trends)
-- Transaction list with manual category editing and metadata display
-- Budget tracking (basic)
-- Cloud deployment to Streamlit Community Cloud
+- Supabase Storage bucket + RLS policies for phone-originated files
+- "Desde el teléfono" section on the Importar page (list → download → existing preview/import pipeline)
+- Sideloaded Android app (Kotlin, single activity) as the share-sheet sender → Supabase Storage
+- Email ingestion pipeline: IMAP polling, per-sender email templates, parser, normalizer
+- Cross-source merge/dedupe between email rows and statement rows (both directions)
+- `source` column + `ingest_state` table (migration 003) + schema file update
+- GitHub Actions scheduled workflow (cron) as the always-on executor
+- Unit tests with synthetic fixtures; dry-run modes; README updates
 
-### Out of Scope (Future Phases)
+### Out of Scope
 
-- Machine learning-based categorization
-- Automatic bank API integrations (Plaid, etc.)
-- Email-based extract parsing
-- Multi-user support / authentication
-- Mobile-native apps (PWA is acceptable via Streamlit responsiveness)
-- Investment/portfolio tracking
-- Recurring transaction detection
-- Data export
+- PWA / Web Share Target route (rejected — see Risks)
+- Gmail API / OAuth (IMAP + app password is sufficient)
+- Telegram bot / other relays (not chosen)
+- Enrichment of email rows with statement `comrobante` (optional later)
+- iOS support
+- Real-time push to the browser (polling latency is acceptable)
 
 ## Constraints
 
-- Python 3.13 only
-- Free-tier cloud hosting (Streamlit Community Cloud)
-- Free-tier database (Supabase PostgreSQL)
-- Must use `uv` for dependency management
-- No secrets committed to repository
-- Responsive web UI (works on mobile, tablet, desktop)
-- Use established libraries; do not reinvent the wheel
-- UI language: Spanish
-- Currency: ARS and USD (multi-currency with switcher)
+- Free tiers only: Streamlit Community Cloud + Supabase (1 GB storage, 50 MB/file, 500 MB DB)
+- Repo is **public** → no real bank data or emails in the repo; test fixtures must be synthetic/sanitized
+- Python 3.13, uv, ruff/mypy/pytest gates must stay green
+- Existing patterns: `src/core/` logic, `scripts/` entrypoints, `supabase_migration_NNN.sql` + `supabase_schema.sql` dual files, `samples/` gitignored
+- No new dependencies unless clear value (only `beautifulsoup4` added, for HTML email parsing)
+- Secrets only in GitHub Actions secrets / Streamlit secrets / env vars — never committed
 
-## Relevant Architecture & Files
+## Relevant architecture/files
 
-| File/Directory | Purpose |
+| File | Why it matters |
 |---|---|
-| `pyproject.toml` | Project metadata, dependencies (streamlit, pandas, supabase, plotly, pdfplumber, openpyxl, sqlmodel, pydantic) |
-| `src/app.py` | Streamlit entry point, navigation, page routing |
-| `src/pages/dashboard.py` | Spending overview, charts, trends (Spanish) |
-| `src/pages/upload.py` | File upload interface, template selection, preview (Spanish) |
-| `src/pages/transactions.py` | Transaction list, filtering, manual category editing, metadata display (Spanish) |
-| `src/pages/budgets.py` | Budget creation and tracking (Spanish) |
-| `src/core/ingestion.py` | File parsing logic (Excel/CSV via pandas, PDF via pdfplumber) |
-| `src/core/categorization.py` | Rule-based categorization engine (Spanish keywords) |
-| `src/core/database.py` | Supabase client, CRUD operations, connection management |
-| `src/core/models.py` | Pydantic/SQLModel data models (Transaction, Category, Account, Budget) |
-| `src/core/templates.py` | Bank template definitions and column mapping (Fiwind, Galicia Mastercard) |
-| `src/components/charts.py` | Reusable Plotly chart components |
-| `src/components/forms.py` | Reusable Streamlit form components |
-| `.streamlit/config.toml` | Streamlit theme and server configuration |
-| `.streamlit/secrets.toml` | Local secrets (gitignored); production uses Streamlit secrets |
-| `tests/test_ingestion.py` | Parsing logic tests |
-| `tests/test_categorization.py` | Categorization engine tests |
-| `tests/test_database.py` | Database operation tests (mocked) |
+| `src/core/database.py` | `get_supabase_client()` catches only `(ImportError, KeyError)`; `st.secrets` raises `StreamlitSecretNotFoundError` when no secrets file exists → **env-var fallback is unreachable in CI (verified)**. Must broaden the except before any headless use. |
+| `src/core/ingestion.py` | `parse_file()` + `classify_movement()` — the phone-upload path reuses this unchanged; email rows reuse `classify_movement` for `movement_type`. |
+| `src/core/templates.py` | `BankTemplate` pattern — mirror it with an `EmailTemplate` dataclass (sender/subject regex + field extraction). |
+| `src/pages/upload.py` | Preview/import pipeline (`_parse_and_store`, `_render_preview`, `_import_transactions`, `_dedupe_key`). Phone files feed this; merge logic extends `_import_transactions`. |
+| `src/core/categorization.py` | `categorize_transaction()` reused for email rows. |
+| `scripts/` | Entrypoint pattern (`diagnose.py`, `cleanup_imports.py`) → new `scripts/poll_email.py`. |
+| `supabase_migration_002_movement_types.sql`, `supabase_schema.sql` | Migration pattern to follow for migration 003. |
+| `.streamlit/config.toml` | `server.enableStaticServing` exists (default false) — not needed for the chosen path. |
 
-## Bank Templates
+## Verified research findings (shape the design)
 
-### Fiwind (Excel)
+- **Streamlit Community Cloud sleeps apps after 12h without traffic** → an in-app background poller is unreliable; the email poller must run outside the app (GitHub Actions).
+- **GitHub Actions: public repos get free unlimited runners**; minimum cron interval is **5 minutes**; schedules can be delayed/dropped at the top of the hour → use offset minutes (e.g. `2-59/5`); schedules auto-disable after 60 days of repo inactivity.
+- **Supabase free tier**: 1 GB storage, 50 MB max file, 500 MB DB; **free projects pause after 1 week of inactivity** — the poller's regular DB traffic should count as activity (assumption, verify early).
+- **PWA share_target is not viable now**: open Chrome 153 regression drops shared files for installed PWAs, and Streamlit cannot inject `<link rel="manifest">` into the HTML head. → native sideloaded app is the primary path.
+- **Storage security model**: private bucket + `INSERT` policy for the `anon` role only (no SELECT/DELETE) → the publishable key embedded in the APK can only add files, never read statements; the app server uses the secret key (bypasses RLS) for list/download.
 
-- **File**: `.xlsx` with sheets "Actividad" and "Balance"
-- **Sheet**: "Actividad"
-- **Columns**:
-  - `Fecha` → `date` (format: `DD/MM/YYYY HH:MM:SS`)
-  - `Tipo` → `metadata.tipo` (e.g., "Rendimiento bonificado", "Ganancia diaria", "Retiro", "Conversión")
-  - `Monto` → `amount`
-  - `Moneda` → `currency` (ARS, USDT, etc.)
-  - `Monto Origen` → `metadata.monto_origen`
-  - `Moneda Origen` → `metadata.moneda_origen`
-  - `Precio` → `metadata.precio`
-- **Sheet "Balance"**: Shows balances by currency (ARS, BUSD, USDC, USDT) — can be used for account balance tracking
+## Ordered implementation steps
 
-### Galicia Mastercard (PDF)
+### Phase 0 — Foundation (no user dependency)
 
-- **File**: `.pdf` with 8 pages
-- **Section**: "DETALLE DEL CONSUMO"
-- **Columns**:
-  - `FECHA` → `date` (format: `DD-Mon-YY`, e.g., `05-Sep-26`)
-  - `REFERENCIA` → `description` (merchant name)
-  - `COMPROBANTE` → `metadata.comprobante`
-  - `PESOS` → `amount` (ARS)
-  - `DÓLARES` → `amount` (USD)
-- **Number format**: Argentine (dots for thousands, comma for decimals: `30.797,00`)
-- **Special sections**:
-  - "COMPRAS DEL MES" → `metadata.seccion` = "compras"
-  - "CUOTA DEL MES" → `metadata.seccion` = "cuota" (installment payments)
-- **Multi-currency**: ARS and USD columns — create separate transactions for each currency
+- [ ] 0.1 Fix `get_supabase_client()` in `src/core/database.py`: broaden the except to also catch `StreamlitSecretNotFoundError` (or reorder to try env vars first) so headless/CI runs work — **verified broken today**
+- [ ] 0.2 Add `beautifulsoup4` to `pyproject.toml` dependencies (HTML email parsing)
+- [ ] 0.3 Unit test: `get_supabase_client()` falls back to env vars when no secrets file exists (simulate via temp cwd)
 
-## Data Models
+### Phase 1 — Feature 1: phone uploads
 
-### Transaction
+- [ ] 1.1 Migration `supabase_migration_003_phone_uploads.sql`: create private `imports` bucket + RLS policy `FOR INSERT TO anon WITH CHECK (bucket_id = 'imports')` (no SELECT/DELETE for anon); mirror into `supabase_schema.sql`
+- [ ] 1.2 `src/pages/upload.py`: add source selector ("Subir archivo" / "Desde el teléfono"); phone mode lists bucket objects newest-first via `client.storage.from_("imports").list()`, downloads selected file, feeds existing `_parse_and_store` → shared template select + preview + import (dedupe applies unchanged)
+- [ ] 1.3 `mobile/` Android app (Kotlin, single `MainActivity`): `ACTION_SEND` / `ACTION_SEND_MULTIPLE` intent filters (pdf, xlsx, csv, xls); read `content://` URI via `ContentResolver`; HTTP PUT to `https://<ref>.supabase.co/storage/v1/object/imports/<YYYY-MM-DD_HHMMSS>_<name>` with `Authorization: Bearer <publishable key>`, `x-upsert: true`; minimal UI (filename, upload button, result toast)
+- [ ] 1.4 Build APK (Gradle), sideload to phone, E2E: share a sample PDF from another app → file appears in Importar phone list → preview → import → visible in Transacciones/Dashboard
+- [ ] 1.5 Optional: delete-object button in the phone list (uses secret key)
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | UUID | Primary key |
-| `date` | datetime | Transaction date |
-| `description` | str | Merchant/description |
-| `amount` | float | Transaction amount |
-| `currency` | str | Currency code (ARS, USD) |
-| `account` | str | Source account (Fiwind, Galicia Mastercard, etc.) |
-| `category_id` | FK | Category reference |
-| `metadata` | JSONB | Bank-specific fields (tipo, comprobante, moneda_origen, precio, seccion, etc.) |
-| `created_at` | datetime | Record creation timestamp |
-| `updated_at` | datetime | Last update timestamp |
+### Phase 2 — Feature 2: email ingest (gated on user-provided samples)
 
-### Category
+- [ ] 2.0 **Done (2026-10-02)**: samples received in `samples/emails/` — format documented above
+- [ ] 2.1 Migration `supabase_migration_004_email_ingest.sql`: add `source TEXT NOT NULL DEFAULT 'extracto'` to `transactions`; create `ingest_state(key TEXT PK, value TEXT, updated_at)`; mirror into `supabase_schema.sql`
+- [ ] 2.2 `src/core/email_templates.py`: `EmailTemplate` dataclass (name, sender regex, subject regex, account, extractor) mirroring `templates.py`; v1 template: sender `alertas@misconsultas.com.ar`, subject `Aviso de consumo con tarjeta`, extractor = BeautifulSoup `li`/`b` field map (Comercio→description, Importe→amount via `parse_amount_argentine`, Moneda PESOS→ARS / DÓLARES→USD, Fecha+Hora→datetime, metadata: tipo, cuotas, estado, tarjeta_ult4, message_id)
+- [ ] 2.3 `src/core/email_ingest.py`: IMAP fetch (stdlib `imaplib` + `email`), UID state from `ingest_state`, HTML→text via BeautifulSoup, normalize to transaction dicts (naive Argentina-local datetime, `movement_type` via `classify_movement`, category via `categorize_transaction`, `metadata.message_id` + `source='email'`)
+- [ ] 2.4 `src/core/merging.py`: cross-source match — signature `(account, currency, abs(amount))` + calendar date within ±3 days; count-based pairing per group (handles repeated equal amounts); description token-overlap guard; used by **both** directions (statement import skips rows matching existing email rows; poller skips rows matching existing extracto rows)
+- [ ] 2.5 Wire merge into `src/pages/upload.py::_import_transactions` (after exact-key dedupe, before insert) and into the poller
+- [ ] 2.6 `scripts/poll_email.py`: entrypoint with `--dry-run`; prints per-run report (fetched / new / merged-skipped / inserted); updates `ingest_state`
+- [ ] 2.7 `.github/workflows/email-ingest.yml`: `schedule: cron "2-59/5 * * * *"` (offset to avoid top-of-hour load) + `workflow_dispatch`; `astral-sh/setup-uv` with cache; `uv sync --frozen`; env from secrets (`IMAP_HOST`, `IMAP_USER`, `IMAP_APP_PASSWORD`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`)
+- [ ] 2.8 Live verification: trigger `workflow_dispatch` with `--dry-run`, review output, enable real insert; confirm a real notification lands as a `gasto` row; import the monthly statement and confirm **no duplicates** (row count unchanged for that period)
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | UUID | Primary key |
-| `name` | str | Category name (Spanish) |
-| `color` | str | Hex color for charts |
-| `icon` | str | Emoji or icon identifier |
+### Phase 3 — Polish
 
-### Default Categories (Spanish)
+- [ ] 3.1 Optional: "Fuente" badge/filter on Transacciones (extracto vs email)
+- [ ] 3.2 Optional: "Última ingesta de correos: hace X" on Importar page (reads `ingest_state`)
+- [ ] 3.3 README: document phone-upload flow, email ingest architecture, GH Actions setup, secrets list
 
-- `Vivienda` (Housing)
-- `Alimentación` (Food & Dining)
-- `Transporte` (Transportation)
-- `Servicios` (Utilities)
-- `Entretenimiento` (Entertainment)
-- `Salud` (Healthcare)
-- `Compras` (Shopping)
-- `Ingresos` (Income)
-- `Transferencias` (Transfers)
-- `Otros` (Other)
+## Verification / testing strategy
 
-### Budget
+- [ ] Unit: `database.py` env fallback (0.3)
+- [ ] Unit: email template parser against synthetic `.eml` fixtures in `tests/fixtures/emails/` (sanitized — repo is public)
+- [ ] Unit: merge logic — both directions, equal-amount repeats, email-time vs statement-midnight dates, no false positives for different merchants
+- [ ] Unit: poller dry-run with a mocked IMAP mailbox (fixture emails)
+- [ ] E2E manual: phone share → import (1.4); email → row → statement import → no dupes (2.8)
+- [ ] Gates after each phase: `uv run pytest`, `uv run ruff check src/ tests/ scripts/`, `uv run mypy src/`
+- [ ] Idempotency check: run poller twice → second run inserts 0
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | UUID | Primary key |
-| `category_id` | FK | Category reference |
-| `amount` | float | Budget amount |
-| `currency` | str | Budget currency (ARS or USD) |
-| `month` | int | Budget month (1-12) |
-| `year` | int | Budget year |
-
-## Ordered Implementation Steps
-
-### Phase 1: Project Scaffolding
-
-- [ ] 1.1 Create `pyproject.toml` with all dependencies (streamlit, pandas, supabase, plotly, pdfplumber, openpyxl, sqlmodel, pydantic, python-dotenv, pytest, ruff, mypy)
-- [ ] 1.2 Create directory structure (`src/`, `src/pages/`, `src/core/`, `src/components/`, `tests/`, `.streamlit/`)
-- [ ] 1.3 Create `.streamlit/config.toml` with basic theme settings
-- [ ] 1.4 Create `.gitignore` (include `.streamlit/secrets.toml`, `__pycache__`, `.venv`, `.env`)
-- [ ] 1.5 Create `src/app.py` with basic Streamlit page setup and navigation (Spanish)
-
-### Phase 2: Data Layer
-
-- [ ] 2.1 Define Pydantic models in `src/core/models.py` (Transaction, Category, Account, Budget)
-- [ ] 2.2 Implement `src/core/database.py` with Supabase client initialization
-- [ ] 2.3 Implement CRUD operations for transactions (create, read, update, delete)
-- [ ] 2.4 Implement CRUD operations for categories and budgets
-- [ ] 2.5 Add database connection health check and error handling
-
-### Phase 3: Ingestion Engine
-
-- [ ] 3.1 Implement Excel/CSV parsing in `src/core/ingestion.py` using pandas
-- [ ] 3.2 Implement PDF parsing in `src/core/ingestion.py` using pdfplumber
-- [ ] 3.3 Create bank template system in `src/core/templates.py` (column mappings, date formats, amount columns)
-- [ ] 3.4 Implement Fiwind template (Excel parser with metadata extraction)
-- [ ] 3.5 Implement Galicia Mastercard template (PDF parser with Argentine number format, multi-currency, section detection)
-- [ ] 3.6 Add data validation and cleaning (date parsing, amount normalization, deduplication)
-
-### Phase 4: Categorization Engine
-
-- [ ] 4.1 Implement rule-based categorization in `src/core/categorization.py`
-- [ ] 4.2 Create default category set in Spanish (Vivienda, Alimentación, Transporte, Servicios, Entretenimiento, Salud, Compras, Ingresos, Transferencias, Otros)
-- [ ] 4.3 Implement keyword-to-category mapping with priority ordering (Spanish keywords)
-- [ ] 4.4 Add "Otros" fallback for unmatched transactions
-- [ ] 4.5 Allow manual category override (stored in database)
-
-### Phase 5: UI - Upload & Transactions
-
-- [ ] 5.1 Build upload page (`src/pages/upload.py`) with file uploader (Spanish)
-- [ ] 5.2 Add bank template selector dropdown (Fiwind, Galicia Mastercard)
-- [ ] 5.3 Implement parse preview (show first 10 rows before committing)
-- [ ] 5.4 Add "Importar" button that saves to database
-- [ ] 5.5 Build transactions page (`src/pages/transactions.py`) with data table (Spanish)
-- [ ] 5.6 Add filtering by date range, category, account, currency
-- [ ] 5.7 Add inline category editing with dropdown
-- [ ] 5.8 Add metadata display (expandable row or tooltip showing bank-specific fields)
-
-### Phase 6: UI - Dashboard & Budgets
-
-- [ ] 6.1 Build dashboard page (`src/pages/dashboard.py`) (Spanish)
-- [ ] 6.2 Add currency switcher (ARS/USD) in header or sidebar
-- [ ] 6.3 Implement spending-by-category pie chart (Plotly)
-- [ ] 6.4 Implement monthly spending trend line chart
-- [ ] 6.5 Implement account balance summary cards
-- [ ] 6.6 Build budgets page (`src/pages/budgets.py`) (Spanish)
-- [ ] 6.7 Implement budget creation form
-- [ ] 6.8 Implement budget vs. actual progress bars
-
-### Phase 7: Integration & Polish
-
-- [ ] 7.1 Add error handling and user-friendly error messages throughout (Spanish)
-- [ ] 7.2 Add loading states and progress indicators
-- [ ] 7.3 Ensure responsive layout for mobile/tablet
-- [ ] 7.4 Add empty states (no data, no transactions)
-- [ ] 7.5 Write unit tests for ingestion, categorization, and database modules
-
-### Phase 8: Deployment
-
-- [ ] 8.1 Create Streamlit Community Cloud account and connect GitHub repo
-- [ ] 8.2 Configure Supabase project and set secrets in Streamlit
-- [ ] 8.3 Deploy and verify end-to-end functionality
-- [ ] 8.4 Test on mobile device
-
-## Verification & Testing Strategy
-
-- [ ] Unit tests for Excel/CSV parsing with sample Fiwind file
-- [ ] Unit tests for PDF parsing with sample Galicia Mastercard file
-- [ ] Unit tests for categorization rules (Spanish keyword matching, edge cases)
-- [ ] Unit tests for database CRUD operations (mocked Supabase)
-- [ ] Integration test: upload Excel -> parse -> categorize -> save to DB -> display
-- [ ] Integration test: upload PDF -> parse -> categorize -> save to DB -> display
-- [ ] Manual testing: verify UI on desktop browser
-- [ ] Manual testing: verify UI on mobile browser (responsive)
-- [ ] Lint: `uv run ruff check src/`
-- [ ] Typecheck: `uv run mypy src/`
-- [ ] Full test suite: `uv run pytest`
-
-## Risks, Assumptions & Unresolved Unknowns
-
-### Assumptions
-
-- User can manually download Excel/CSV/PDF extracts from their bank/card apps (no direct API integration for now)
-- Bank extract formats are relatively stable (templates may need occasional updates)
-- Single-user app is sufficient for now (no auth needed beyond Streamlit's basic protection)
-- Supabase free tier (500MB) is sufficient for personal transaction history
-- User is based in Argentina (ARS currency, Argentine number formats)
+## Risks, assumptions, unresolved unknowns
 
 ### Risks
 
-- **Bank format changes**: Bank extracts may change format without notice, breaking parsers. Mitigation: template system makes updates easy.
-- **PDF parsing variability**: PDF extracts can be inconsistent. Mitigation: pdfplumber with fallback regex extraction.
-- **Streamlit Cold Start**: Free tier apps sleep after inactivity, causing slow initial load. Mitigation: acceptable for personal use.
-- **Supabase free tier limits**: 500MB storage, 2 project limit. Mitigation: sufficient for years of personal data.
-- **Multi-currency complexity**: Exchange rates needed for currency conversion. Mitigation: use a free exchange rate API or allow manual rate input.
+- **Merge false positives**: two different purchases of the same amount within ±3 days could cross-match → mitigated by count-based pairing + token guard; dry-run review before enabling real inserts
+- **GH cron delays/drops** at top of hour → offset minutes; latency bound ~5–15 min (accepted as "almost real time")
+- **60-day inactivity auto-disable** of schedules → repo is actively used; note in README
+- **Supabase free project pause** after 1 week of inactivity → poller traffic should count as activity; verify in first weeks, add keep-alive if needed
+- **Publishable key in APK** is extractable → INSERT-only policy limits damage to bucket pollution (no reads); document accepted risk
+- **Chrome 153 share_target regression** → PWA route avoided entirely
+- **Public repo** → synthetic fixtures only; `samples/` and secrets stay gitignored (verified in `.gitignore`)
 
-### Unresolved Unknowns
+### Assumptions
 
-- Exchange rate source for currency conversion (API vs manual input)
-- Whether to support additional banks beyond Fiwind and Galicia Mastercard in the initial version
+- Notifications are for **Galicia Mastercard** (account name matches existing rows)
+- User can sideload an APK and has Android build tooling (or help setting it up)
+- IMAP access to the mailbox (Gmail app password requires 2-Step Verification)
+- Every-5-min polling is acceptable latency
+- Statement import usually happens after emails, but both orders must work
+- Email timestamps converted to naive America/Argentina/Buenos_Aires (consistent with statement rows)
 
-## Observable Acceptance Criteria
+### Resolved (user confirmed 2026-10-02)
 
-- [ ] User can upload a Fiwind Excel file and see transactions parsed and displayed
-- [ ] User can upload a Galicia Mastercard PDF and see transactions parsed and displayed
-- [ ] Uploaded transactions are automatically categorized based on description keywords (Spanish)
-- [ ] User can manually change a transaction's category via dropdown in the transactions list
-- [ ] Dashboard shows a pie chart of spending by category for the selected month
-- [ ] Dashboard shows a line chart of monthly spending trends
-- [ ] User can switch between ARS and USD currency views
-- [ ] User can view bank-specific metadata (Fiwind Tipo, Galicia Comprobante, etc.) in the transactions list
-- [ ] User can create a monthly budget for a category and see progress (spent vs. budget)
-- [ ] App is accessible via URL on phone, laptop, and tablet browsers
-- [ ] All UI text is in Spanish
-- [ ] No secrets or credentials are stored in the repository
-- [ ] All tests pass and lint/typecheck are clean
+- **Phone-upload approach**: sideloaded Android app → Supabase Storage
+- **Mailbox**: Gmail, IMAP + App Password (requires 2-Step Verification on the account)
+- **Samples received**: `samples/emails/Aviso de consumo con tarjeta.eml` + `... 2.eml` (gitignored)
+- **Merge behavior**: v1 = skip statement rows matching email rows (no enrichment)
+
+### Email format (from samples — Galicia Mastercard via MisConsultas)
+
+- From: `alertas@misconsultas.com.ar` · Subject: `Aviso de consumo con tarjeta`
+- Date header: `-0300` (Argentina) · Message-ID present (idempotency key)
+- HTML body: `<ul>` of `<li>Label: <b>value</b></li>` — parse with BeautifulSoup, split on `:`, take `<b>` text
+- Fields: Tipo de Movimiento (COMPRA), Comercio, Importe (Argentine format `38.710,00`), Moneda (PESOS | DÓLARES), Fecha (DD/MM/YYYY), Hora (HH:MM), Cantidad cuotas, Estado (APROBADA), Últimos 4 dígitos (7672), Ubicación
+- Both samples are PESOS; DÓLARES → USD mapping is an assumption (no sample yet)
+
+## Observable acceptance criteria
+
+- [ ] Sharing a statement PDF from Android's share sheet makes it appear in Importar → "Desde el teléfono" within seconds; preview + import works; rows visible in Transacciones/Dashboard
+- [ ] A card-use notification email produces a `gasto` transaction (correct amount, currency, account, category) within ~15 min of arrival, with no manual action
+- [ ] Importing the monthly statement afterwards does **not** create duplicates for email-tracked purchases (verified by row counts)
+- [ ] Re-running the poller (or a GH Actions re-run) inserts 0 duplicate rows
+- [ ] All existing behavior preserved: 28+ tests pass, ruff/mypy clean, browser upload flow unchanged
