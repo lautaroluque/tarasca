@@ -1,0 +1,38 @@
+From: alertas@misconsultas.com.ar
+To: test@example.com
+Subject: Aviso de consumo con tarjeta
+Date: Fri, 02 Oct 2026 13:36:43 -0300
+Message-ID: <test-0002@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============4221824251622415364=="
+
+--===============4221824251622415364==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Plain text fallback
+
+--===============4221824251622415364==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body>
+<p>A trav&eacute;s de nuestro sistema de alertas le informamos el siguiente m=
+ovimiento.</p>
+<ul>
+<li>Tipo de Movimiento: <b>COMPRA</b></li>
+<li>Comercio: <b>OTHER*STORE</b></li>
+<li>Importe: <b>9.876,54</b></li>
+<li>Moneda: <b>PESOS</b></li>
+<li>Fecha: <b>02/10/2026</b></li>
+<li>Hora: <b>13:36</b></li>
+<li>Cantidad cuotas: <b>01</b></li>
+<li>Estado: <b>APROBADA</b></li>
+<li>&Uacute;ltimos 4 d&iacute;gitos de la tarjeta: <b>0000</b></li>
+<li>Ubicaci&oacute;n: <b>Argentina</b></li>
+</ul>
+</body></html>
+
+--===============4221824251622415364==--

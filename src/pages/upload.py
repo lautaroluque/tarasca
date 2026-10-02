@@ -1,6 +1,6 @@
 """Upload page for importing bank extracts."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
@@ -12,6 +12,7 @@ from src.core.database import (
     get_transactions,
 )
 from src.core.ingestion import parse_file
+from src.core.merging import merge_with_existing
 from src.core.templates import list_templates
 
 
@@ -123,6 +124,7 @@ def _import_transactions(transactions: list[dict]) -> None:
                     "account": t["account"],
                     "category_id": category_id,
                     "metadata": t.get("metadata", {}),
+                    "source": t.get("source", "extracto"),
                 }
             )
 
@@ -136,6 +138,18 @@ def _import_transactions(transactions: list[dict]) -> None:
         existing_keys = {_dedupe_key(t) for t in existing}
         new_transactions = [t for t in db_transactions if _dedupe_key(t) not in existing_keys]
         skipped = len(db_transactions) - len(new_transactions)
+
+        # Cross-source merge: skip rows already tracked via email notifications
+        if new_transactions:
+            merge_existing = get_transactions(
+                start_date=min(dates) - timedelta(days=3),
+                end_date=max(dates) + timedelta(days=3),
+                limit=10000,
+            )
+            new_transactions, merge_skipped = merge_with_existing(
+                new_transactions, merge_existing
+            )
+            skipped += merge_skipped
 
         if not new_transactions:
             _set_flash(

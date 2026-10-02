@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount DOUBLE PRECISION NOT NULL,  -- signed: positive = money in, negative = money out
     currency TEXT NOT NULL DEFAULT 'ARS',  -- ARS, USD, USDT, USDC...
     movement_type TEXT NOT NULL DEFAULT 'gasto' CHECK (movement_type IN ('ingreso', 'gasto', 'transferencia')),
+    source TEXT NOT NULL DEFAULT 'extracto' CHECK (source IN ('extracto', 'email', 'manual')),
     account TEXT NOT NULL,
     category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
     metadata JSONB DEFAULT '{}',
@@ -42,8 +43,16 @@ CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account);
 CREATE INDEX IF NOT EXISTS idx_transactions_currency ON transactions(currency);
+CREATE INDEX IF NOT EXISTS idx_transactions_source ON transactions(source);
 CREATE INDEX IF NOT EXISTS idx_budgets_category_id ON budgets(category_id);
 CREATE INDEX IF NOT EXISTS idx_budgets_month_year ON budgets(month, year);
+
+-- Ingest state for the email poller (last processed IMAP UID, etc.)
+CREATE TABLE IF NOT EXISTS ingest_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
 -- Insert default categories
 INSERT INTO categories (name, color, icon) VALUES
