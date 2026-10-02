@@ -26,7 +26,9 @@ def get_supabase_client() -> Client:
 
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["secret_key"]
-    except (ImportError, KeyError):
+    except Exception:
+        # Streamlit not installed, no secrets file (e.g. headless/CI runs),
+        # or missing keys → fall back to environment variables
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SECRET_KEY")
 
