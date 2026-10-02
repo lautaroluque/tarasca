@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from src.core.categorization import categorize_transaction, get_default_categories
-from src.core.database import create_transactions_bulk, get_categories, get_transactions
+from src.core.database import (
+    create_transactions_bulk,
+    get_categories,
+    get_supabase_client,
+    get_transactions,
+)
 from src.core.ingestion import parse_file
 from src.core.templates import list_templates
 
@@ -36,6 +41,19 @@ def _dedupe_key(row: dict) -> tuple:
         row.get("account", ""),
         metadata.get("comprobante", ""),
     )
+
+
+def _list_phone_files() -> list[dict]:
+    """List files shared from the phone, newest first."""
+    client = get_supabase_client()
+    objects = client.storage.from_("imports").list()
+    return sorted(objects, key=lambda o: o.get("created_at") or "", reverse=True)
+
+
+def _download_phone_file(path: str) -> bytes:
+    """Download a file shared from the phone."""
+    client = get_supabase_client()
+    return client.storage.from_("imports").download(path)
 
 
 def _parse_and_store(file_content: bytes, template_name: str, file_extension: str) -> None:
@@ -135,6 +153,8 @@ def _import_transactions(transactions: list[dict]) -> None:
         # Clear preview state so it can't be imported twice
         st.session_state.pop("parsed_transactions", None)
         st.session_state.pop("parsed_count", None)
+        st.session_state.pop("phone_file_content", None)
+        st.session_state.pop("phone_file_name", None)
 
 
 def render_upload_page() -> None:
@@ -148,17 +168,48 @@ def render_upload_page() -> None:
 
     st.markdown("Sube tus extractos bancarios para importar transacciones automáticamente.")
 
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Selecciona un archivo",
-        type=["xlsx", "xls", "csv", "pdf"],
-        help="Formatos soportados: Excel (.xlsx, .xls), CSV, PDF",
+    # Source selection: browser upload or phone upload
+    source = st.radio(
+        "Origen del archivo",
+        ["Subir archivo", "Desde el teléfono"],
+        horizontal=True,
+        help="Desde el teléfono: archivos compartidos con la app de Tarasca",
     )
 
-    if uploaded_file is None:
-        st.session_state.pop("parsed_transactions", None)
-        st.session_state.pop("parsed_count", None)
+    if source == "Subir archivo":
+        st.session_state.pop("phone_file_content", None)
+        st.session_state.pop("phone_file_name", None)
+        uploaded_file = st.file_uploader(
+            "Selecciona un archivo",
+            type=["xlsx", "xls", "csv", "pdf"],
+            help="Formatos soportados: Excel (.xlsx, .xls), CSV, PDF",
+        )
+        file_content = uploaded_file.getvalue() if uploaded_file is not None else None
+        file_name = uploaded_file.name if uploaded_file is not None else None
     else:
+        phone_files = _list_phone_files()
+        if not phone_files:
+            st.info(
+                "No hay archivos del teléfono. Compartí un extracto con la app "
+                "de Tarasca y aparecerá acá."
+            )
+        else:
+            selected_name = st.selectbox(
+                "Archivo del teléfono",
+                [f["name"] for f in phone_files],
+                help="Archivos compartidos con la app de Tarasca",
+            )
+            if st.button("📥 Usar este archivo", type="primary"):
+                try:
+                    st.session_state["phone_file_content"] = _download_phone_file(selected_name)
+                    st.session_state["phone_file_name"] = selected_name
+                except Exception as e:
+                    st.error(f"Error al descargar el archivo: {str(e)}")
+                    st.exception(e)
+        file_content = st.session_state.get("phone_file_content")
+        file_name = st.session_state.get("phone_file_name")
+
+    if file_content is not None and file_name is not None:
         # Template selection
         templates = list_templates()
         template_names = [t.name for t in templates]
@@ -172,11 +223,11 @@ def render_upload_page() -> None:
             )
 
         with col2:
-            st.info(f"Archivo: **{uploaded_file.name}**")
+            st.info(f"Archivo: **{file_name}**")
 
         template_key = selected_template.lower().replace(" ", "_")
         # Invalidate any preview when the source file or template changes
-        preview_source = f"{uploaded_file.name}:{template_key}"
+        preview_source = f"{file_name}:{template_key}"
         if st.session_state.get("preview_source") != preview_source:
             st.session_state.pop("parsed_transactions", None)
             st.session_state.pop("parsed_count", None)
@@ -186,9 +237,9 @@ def render_upload_page() -> None:
         if st.button("🔍 Previsualizar", type="primary"):
             try:
                 _parse_and_store(
-                    uploaded_file.getvalue(),
+                    file_content,
                     template_key,
-                    uploaded_file.name.split(".")[-1],
+                    file_name.split(".")[-1],
                 )
             except Exception as e:
                 st.session_state.pop("parsed_transactions", None)

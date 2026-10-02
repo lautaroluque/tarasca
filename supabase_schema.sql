@@ -68,3 +68,19 @@ ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all access to categories" ON categories FOR ALL USING (true);
 CREATE POLICY "Allow all access to transactions" ON transactions FOR ALL USING (true);
 CREATE POLICY "Allow all access to budgets" ON budgets FOR ALL USING (true);
+
+-- Phone uploads: private Storage bucket for files shared from the phone.
+-- The Android app uploads with the publishable (anon) key; the Streamlit
+-- app reads with the secret key (bypasses RLS). No SELECT/DELETE policies
+-- for anon → files cannot be read back through the anon key.
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('imports', 'imports', false)
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Phone uploads: anon can insert into imports"
+    ON storage.objects
+    FOR INSERT
+    TO anon
+    WITH CHECK (bucket_id = 'imports');

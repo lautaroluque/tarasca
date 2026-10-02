@@ -1,0 +1,4 @@
+# Copy this file to local.properties and fill in your Supabase project values.
+# Get them from: Supabase Dashboard → Project Settings → API
+supabase.url=https://YOUR_PROJECT_REF.supabase.co
+supabase.publishableKey=YOUR_PUBLISHABLE_KEY
