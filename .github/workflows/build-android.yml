@@ -16,6 +16,15 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      - name: Write local.properties
+        working-directory: mobile
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          printf 'supabase.url=%s\nsupabase.publishableKey=%s\n' \
+            "$SUPABASE_URL" "$SUPABASE_PUBLISHABLE_KEY" > local.properties
+
       - name: Make Gradle wrapper executable
         working-directory: mobile
         run: chmod +x gradlew
