@@ -22,6 +22,10 @@ from src.core.movements import classify_movement
 
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
+# Socket timeout for IMAP connect/read/write. Without this, a stalled TCP
+# connection blocks forever and the job hangs until the 6-hour CI limit.
+IMAP_TIMEOUT_SECONDS = 60
+
 # Maps the email's "Moneda" field to our currency codes
 MONEDA_TO_CURRENCY = {
     "PESOS": "ARS",
@@ -34,7 +38,7 @@ def fetch_new_emails(
     host: str, user: str, password: str, last_uid: int = 0
 ) -> list[tuple[Message, int]]:
     """Fetch emails with UID > last_uid via IMAP. Returns (message, uid) pairs."""
-    mail = imaplib.IMAP4_SSL(host)
+    mail = imaplib.IMAP4_SSL(host, timeout=IMAP_TIMEOUT_SECONDS)
     try:
         mail.login(user, password)
         mail.select("INBOX")

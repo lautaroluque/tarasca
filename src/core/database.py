@@ -13,6 +13,31 @@ load_dotenv()
 _supabase_client: Client | None = None
 
 
+def _credentials_from_streamlit_secrets() -> tuple[str | None, str | None]:
+    """Read Supabase credentials from Streamlit secrets.
+
+    Returns (None, None) when not running inside a Streamlit runtime, so
+    headless callers (scripts/, CI) never import Streamlit. Importing it
+    outside a runtime emits CORS/XSRF warnings and can start background
+    threads that keep the process alive.
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        return None, None
+
+    if not st.runtime.exists():
+        return None, None
+
+    try:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["secret_key"]
+    except Exception:
+        return None, None
+
+    return url, key
+
+
 def get_supabase_client() -> Client:
     """Get or create Supabase client."""
     global _supabase_client
@@ -20,15 +45,10 @@ def get_supabase_client() -> Client:
     if _supabase_client is not None:
         return _supabase_client
 
-    # Try to get secrets from Streamlit first, then environment variables
-    try:
-        import streamlit as st
-
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["secret_key"]
-    except Exception:
-        # Streamlit not installed, no secrets file (e.g. headless/CI runs),
-        # or missing keys → fall back to environment variables
+    # Try Streamlit secrets first (app runtime), then environment variables
+    # (headless scripts, CI).
+    url, key = _credentials_from_streamlit_secrets()
+    if not url or not key:
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SECRET_KEY")
 
