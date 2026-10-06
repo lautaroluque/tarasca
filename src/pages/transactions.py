@@ -5,11 +5,48 @@ from datetime import datetime
 import streamlit as st
 
 from src.core.database import (
+    count_transactions,
     delete_transaction,
     get_categories,
     get_transactions,
     update_transaction,
 )
+
+# Rows rendered per page. Each row builds 2 selectboxes + a button + a
+# column row, so the page used to ship ~9000 elements (2004 selectboxes) at
+# limit=1000 and the browser choked on it. Keep this small: the row layout
+# is unchanged, only how many rows are materialized.
+PAGE_SIZE = 50
+
+
+def _render_pager(page: int, total_pages: int, tag: str) -> None:
+    """Prev/next controls. The page lives in session state so edits and
+    filter changes keep the user's place. ``tag`` disambiguates the widget
+    keys of the top and bottom copies rendered on the same page."""
+    col_prev, col_info, col_next = st.columns([1, 2, 1])
+
+    with col_prev:
+        if st.button(
+            "◀ Anterior",
+            key=f"tx_prev_{tag}_{page}",
+            disabled=page <= 0,
+            width="stretch",
+        ):
+            st.session_state["tx_page"] = page - 1
+            st.rerun()
+
+    with col_info:
+        st.caption(f"Página {page + 1} de {total_pages}")
+
+    with col_next:
+        if st.button(
+            "Siguiente ▶",
+            key=f"tx_next_{tag}_{page}",
+            disabled=page >= total_pages - 1,
+            width="stretch",
+        ):
+            st.session_state["tx_page"] = page + 1
+            st.rerun()
 
 
 def render_transactions_page() -> None:
@@ -76,21 +113,49 @@ def render_transactions_page() -> None:
     currency = None if selected_currency == "Todas" else selected_currency
     movement_type = movement_labels[selected_movement]
 
-    transactions = get_transactions(
+    # Any filter change means the current page index may be out of range,
+    # so start over from the first page.
+    filter_key = (
+        category_id,
+        account,
+        currency,
+        movement_type,
+        start_date,
+        end_date,
+    )
+    if st.session_state.get("tx_filter_key") != filter_key:
+        st.session_state["tx_filter_key"] = filter_key
+        st.session_state["tx_page"] = 0
+
+    total = count_transactions(
         category_id=category_id,
         account=account,
         currency=currency,
         movement_type=movement_type,
         start_date=start_date,
         end_date=end_date,
-        limit=1000,
     )
-
-    if not transactions:
+    if total == 0:
         st.info("No se encontraron transacciones con los filtros seleccionados.")
         return
 
-    st.caption(f"Mostrando {len(transactions)} transacciones")
+    total_pages = max(1, -(-total // PAGE_SIZE))
+    page = min(int(st.session_state.get("tx_page", 0)), total_pages - 1)
+    st.session_state["tx_page"] = page
+
+    transactions = get_transactions(
+        skip=page * PAGE_SIZE,
+        limit=PAGE_SIZE,
+        category_id=category_id,
+        account=account,
+        currency=currency,
+        movement_type=movement_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    _render_pager(page, total_pages, "top")
+    st.caption(f"Mostrando {len(transactions)} de {total} transacciones")
 
     movement_types = {
         "gasto": "Gasto",
@@ -194,3 +259,6 @@ def render_transactions_page() -> None:
                         st.error(f"Error: {str(e)}")
 
             st.divider()
+
+    # Same controls after the list, so a long page does not need scrolling back
+    _render_pager(page, total_pages, "bottom")

@@ -7,9 +7,9 @@ import streamlit as st
 from src.core.categorization import categorize_transaction, get_default_categories
 from src.core.database import (
     create_transactions_bulk,
+    get_all_transactions,
     get_categories,
     get_supabase_client,
-    get_transactions,
 )
 from src.core.ingestion import parse_file
 from src.core.merging import merge_with_existing
@@ -128,12 +128,13 @@ def _import_transactions(transactions: list[dict]) -> None:
                 }
             )
 
-        # Skip transactions already in the database (re-importing the same file)
+        # Skip transactions already in the database (re-importing the same file).
+        # get_all_transactions pages past Supabase's 1000-row cap so dedupe
+        # cannot miss existing rows and import duplicates.
         dates = [t["date"] for t in transactions]
-        existing = get_transactions(
+        existing = get_all_transactions(
             start_date=min(dates),
             end_date=max(dates),
-            limit=10000,
         )
         existing_keys = {_dedupe_key(t) for t in existing}
         new_transactions = [t for t in db_transactions if _dedupe_key(t) not in existing_keys]
@@ -141,10 +142,9 @@ def _import_transactions(transactions: list[dict]) -> None:
 
         # Cross-source merge: skip rows already tracked via email notifications
         if new_transactions:
-            merge_existing = get_transactions(
+            merge_existing = get_all_transactions(
                 start_date=min(dates) - timedelta(days=3),
                 end_date=max(dates) + timedelta(days=3),
-                limit=10000,
             )
             new_transactions, merge_skipped = merge_with_existing(
                 new_transactions, merge_existing

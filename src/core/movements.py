@@ -65,6 +65,11 @@ def _apply_rules(
         return "transferencia", "in"
     if "ganancia" in desc or "rendimiento" in desc:
         return "ingreso", "in"
+    # Moving money to/from another of my own accounts: not income, not an
+    # expense. Checked before "retiro a", which would otherwise match
+    # "Retiro a una cuenta propia" and count it as a payment.
+    if "cuenta propia" in desc:
+        return "transferencia", "in" if raw_amount >= 0 else "out"
     if "retiro a" in desc:  # withdrawal to a person = payment
         return "gasto", "out"
     if "retiro" in desc:

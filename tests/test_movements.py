@@ -47,6 +47,33 @@ def test_fiwind_retiro_a_person_is_expense():
     assert amount == -350000.0
 
 
+def test_fiwind_retiro_to_own_account_is_transfer():
+    # Must not be read as "retiro a" (withdrawal to a person): moving money
+    # between my own accounts is not spending, and the amount/sign stay put.
+    movement_type, amount = classify_movement(
+        "fiwind", "Retiro a una cuenta propia", -77516.50
+    )
+    assert movement_type == "transferencia"
+    assert amount == -77516.50
+
+
+def test_fiwind_deposit_to_own_account_is_transfer():
+    movement_type, amount = classify_movement(
+        "fiwind", "Depósito de cuenta propia", 150000.0
+    )
+    assert movement_type == "transferencia"
+    assert amount == 150000.0
+
+
+def test_own_account_rule_applies_to_default_template():
+    # The rule lives in the shared (non-Galicia) branch, so any template gets it
+    movement_type, amount = classify_movement(
+        "otro_banco", "Retiro a una cuenta propia", -1000.0
+    )
+    assert movement_type == "transferencia"
+    assert amount == -1000.0
+
+
 def test_fiwind_conversion_is_transfer():
     movement_type, amount = classify_movement("fiwind", "Conversión", 350000.0)
     assert movement_type == "transferencia"

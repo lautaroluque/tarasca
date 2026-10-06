@@ -1,5 +1,6 @@
 """Database connection and CRUD operations for Tarasca using Supabase."""
 
+import json
 import os
 import sys
 from datetime import datetime
@@ -7,6 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from dotenv import load_dotenv
+from postgrest.types import CountMethod
 from supabase import Client, create_client
 
 load_dotenv()
@@ -99,19 +101,20 @@ def create_category(category_data: dict) -> dict[str, Any]:
 # Transaction CRUD
 
 
-def get_transactions(
-    skip: int = 0,
-    limit: int = 100,
+def _transaction_query(
+    client: Client,
+    *,
+    columns: str = "*",
+    count: CountMethod | None = None,
     category_id: UUID | None = None,
     account: str | None = None,
     currency: str | None = None,
     movement_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Get transactions with optional filters."""
-    client = get_supabase_client()
-    query = client.table("transactions").select("*")
+) -> Any:
+    """Build a filtered (unordered) transactions query."""
+    query = client.table("transactions").select(columns, count=count)
 
     if category_id:
         query = query.eq("category_id", str(category_id))
@@ -125,9 +128,91 @@ def get_transactions(
         query = query.gte("date", start_date.isoformat())
     if end_date:
         query = query.lte("date", end_date.isoformat())
+    return query
 
+
+def get_transactions(
+    skip: int = 0,
+    limit: int = 100,
+    category_id: UUID | None = None,
+    account: str | None = None,
+    currency: str | None = None,
+    movement_type: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Get transactions with optional filters."""
+    client = get_supabase_client()
+    query = _transaction_query(
+        client,
+        category_id=category_id,
+        account=account,
+        currency=currency,
+        movement_type=movement_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
     response = query.order("date", desc=True).range(skip, skip + limit - 1).execute()
     return [cast(dict[str, Any], item) for item in response.data]
+
+
+def count_transactions(
+    category_id: UUID | None = None,
+    account: str | None = None,
+    currency: str | None = None,
+    movement_type: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> int:
+    """Count transactions matching the filters (not capped by row limits)."""
+    client = get_supabase_client()
+    query = _transaction_query(
+        client,
+        columns="id",
+        count=CountMethod.exact,
+        category_id=category_id,
+        account=account,
+        currency=currency,
+        movement_type=movement_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    response = query.limit(1).execute()
+    return int(response.count or 0)
+
+
+def get_all_transactions(
+    category_id: UUID | None = None,
+    account: str | None = None,
+    currency: str | None = None,
+    movement_type: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Get every transaction matching the filters, however many there are.
+
+    Supabase's API caps rows returned per request at 1000 no matter what
+    ``limit`` asks for, so a single ``limit=10000`` silently truncates. Page
+    through ``range()`` until a page comes back short instead.
+    """
+    page_size = 1000
+    rows: list[dict[str, Any]] = []
+    skip = 0
+    while True:
+        page = get_transactions(
+            skip=skip,
+            limit=page_size,
+            category_id=category_id,
+            account=account,
+            currency=currency,
+            movement_type=movement_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        skip += page_size
 
 
 def get_transaction_by_id(transaction_id: UUID) -> dict[str, Any] | None:
@@ -228,3 +313,41 @@ def delete_budget(budget_id: UUID) -> bool:
     client = get_supabase_client()
     response = client.table("budgets").delete().eq("id", str(budget_id)).execute()
     return len(response.data) > 0
+
+
+# Key/value app settings
+#
+# Stored in `ingest_state`, the only key/value table in the schema (migration
+# 004). The email poller owns the `imap_*` keys; anything else here is app
+# state such as the opening balances used for the combined balance view.
+
+
+def get_setting(key: str) -> str | None:
+    """Read a value from the settings key/value store."""
+    client = get_supabase_client()
+    response = client.table("ingest_state").select("value").eq("key", key).execute()
+    if response.data:
+        return str(cast(dict[str, Any], response.data[0]).get("value"))
+    return None
+
+
+def set_setting(key: str, value: str) -> None:
+    """Write a value to the settings key/value store (upsert)."""
+    client = get_supabase_client()
+    client.table("ingest_state").upsert({"key": key, "value": value}).execute()
+
+
+def get_setting_json(key: str, default: Any) -> Any:
+    """Read a JSON-encoded setting, falling back to ``default``."""
+    raw = get_setting(key)
+    if raw is None:
+        return default
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def set_setting_json(key: str, value: Any) -> None:
+    """Write a JSON-encoded setting."""
+    set_setting(key, json.dumps(value, ensure_ascii=False))

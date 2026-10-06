@@ -15,7 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.core.categorization import categorize_transaction, get_default_categories
-from src.core.database import get_supabase_client
+from src.core.database import get_setting, set_setting
 from src.core.email_templates import match_email_template
 from src.core.ingestion import parse_amount_argentine
 from src.core.movements import classify_movement
@@ -123,20 +123,12 @@ def fetch_new_emails(
 
 def get_ingest_state(key: str) -> str | None:
     """Read a value from the ingest_state table."""
-    client = get_supabase_client()
-    resp = client.table("ingest_state").select("value").eq("key", key).execute()
-    if resp.data and len(resp.data) > 0:
-        row: Any = resp.data[0]
-        return str(row.get("value"))
-    return None
+    return get_setting(key)
 
 
 def set_ingest_state(key: str, value: str) -> None:
     """Write a value to the ingest_state table (upsert)."""
-    client = get_supabase_client()
-    client.table("ingest_state").upsert(
-        {"key": key, "value": value}
-    ).execute()
+    set_setting(key, value)
 
 
 def get_html_body(msg: Message) -> str | None:

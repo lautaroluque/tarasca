@@ -62,15 +62,14 @@ def main() -> None:
     # Filter out transactions already in the database (idempotency)
     from datetime import timedelta
 
-    from src.core.database import get_transactions
+    from src.core.database import get_all_transactions
     from src.core.merging import merge_with_existing
 
     if transactions:
         dates = [t["date"] for t in transactions]
-        existing = get_transactions(
+        existing = get_all_transactions(
             start_date=min(dates) - timedelta(days=3),
             end_date=max(dates) + timedelta(days=3),
-            limit=10000,
         )
         transactions, skipped = merge_with_existing(transactions, existing)
         if skipped:

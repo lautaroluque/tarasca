@@ -146,3 +146,54 @@ Add two ingestion channels to Tarasca without changing the existing extract-impo
 - [ ] Importing the monthly statement afterwards does **not** create duplicates for email-tracked purchases (verified by row counts)
 - [ ] Re-running the poller (or a GH Actions re-run) inserts 0 duplicate rows
 - [ ] All existing behavior preserved: 28+ tests pass, ruff/mypy clean, browser upload flow unchanged
+
+---
+
+# Implementation Plan: Combined Balance + Transactions Performance
+
+Added 2026-10-06 (the plan above is the phone-upload/email-ingest task; its live
+state is in `TASK.md`). This task came from two user complaints after a large
+statement import: Transacciones became unusable, and the dashboard's per-currency
+split does not describe a user who earns in USDT and spends in ARS.
+
+## Goal
+
+1. **Transacciones responsive again**: server-side pagination instead of rendering 1000 rows (≈9000 elements, 2004 selectboxes) per run.
+2. **Own-account transfers are not expenses**: `Retiro a una cuenta propia` was classified as `gasto` by the `"retiro a"` rule, inflating expense metrics (63% of ARS, 96% of USD "gastos" in the current data).
+3. **One combined balance**: a single total across ARS/USD/USDT in a selectable base currency, built from every movement plus user-entered opening balances, converted with rates derived from the user's own swaps.
+
+## Resolved (user confirmed 2026-10-06)
+
+- **Rates**: derived from the user's own swaps (the `monto_origen`/`moneda_origen` metadata on every converted leg) — no external API.
+- **Opening balances**: the user enters them per account + currency.
+- **Base currency**: selectable switcher, default ARS.
+- **Scope of backfill**: only rows matching `cuenta propia` (all 153 are Fiwind); other withdrawals stay expenses.
+
+## Constraints (inherited)
+
+- Supabase PostgREST hard-caps rows per request at 1000 regardless of `limit` → every "give me everything" path must page with `range()` (`get_all_transactions`).
+- No schema migration for this task: settings reuse `ingest_state` (the only key/value table) under the key `opening_balances`.
+- No new dependencies.
+
+## Steps
+
+- [x] 1.1 `count_transactions()` (PostgREST `count=exact`, unaffected by the row cap) + `get_all_transactions()` in `src/core/database.py`; dedupe/aggregate callers in `upload.py`, `budgets.py`, `poll_email.py` moved off `limit=10000`
+- [x] 1.2 `src/pages/transactions.py`: 50 rows/page, page index in `st.session_state`, reset when filters change, pager above and below the list
+- [x] 2.1 `src/core/movements.py`: `cuenta propia` → `transferencia` (sign preserved) checked before `retiro a`; tests in `tests/test_movements.py`
+- [x] 2.2 Backfill the 153 already-imported rows with `scripts/backfill_own_account_transfers.py`
+      — **applied 2026-10-06** (dry-run reviewed first); rollback JSON written to
+      `backfill_own_account_rollback.json` (gitignored)
+- [x] 3.1 `src/core/fx.py`: rate table pivoted on ARS, median of swaps in the last 60 days, per-currency stale fallback, sample counts/dates exposed for the UI caption
+- [x] 3.2 `src/pages/dashboard.py`: "Patrimonio" block (combined total, base-currency switcher, opening-balance editor, rate caption); monthly flows also expressed in the base currency
+- [x] 3.3 Settings store `get_setting_json`/`set_setting_json` in `src/core/database.py`; `email_ingest` now delegates to it (no duplicated key/value code)
+- [ ] 3.4 User enters the real opening balances in the UI (combined total is negative until then: data starts 2026-01-01)
+- [x] 4.1 Delete `.agent/_*.py` scratch scripts before committing
+- [x] 4.2 Gates + commit (push only when asked)
+
+## Acceptance criteria
+
+- [x] Transacciones renders 50 rows/page with "Mostrando 50 de 1579", pager works at both ends of the range, changing a filter returns to page 1 (verified with `AppTest`)
+- [x] `Retiro a una cuenta propia` classifies as `transferencia`; after the backfill, expense metrics dropped by 44.47M ARS and 3,692.28 USD (gasto 482 → 329) with every cumulative balance unchanged
+- [x] Dashboard shows one combined total in the selected base currency, with a caption naming the swap rates used (verified in ARS and USD)
+- [x] Transfers and swaps never appear in the Ingresos/Gastos metrics
+- [x] Gates green: `uv run pytest`, `uv run ruff check src/ scripts/ tests/`, `uv run mypy src/`

@@ -8,9 +8,9 @@ import streamlit as st
 from src.core.database import (
     create_budget,
     delete_budget,
+    get_all_transactions,
     get_budgets,
     get_categories,
-    get_transactions,
 )
 
 
@@ -46,10 +46,9 @@ def render_budgets_page() -> None:
     else:
         end_date = datetime(selected_year, selected_month + 1, 1)
 
-    transactions = get_transactions(
+    transactions = get_all_transactions(
         start_date=start_date,
         end_date=end_date,
-        limit=10000,
     )
 
     # Calculate actual spending by category

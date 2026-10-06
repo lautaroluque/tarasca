@@ -39,3 +39,6 @@ htmlcov/
 
 # samples
 samples/
+
+# backfill rollback files (transaction ids, written by scripts/)
+backfill_*.json
