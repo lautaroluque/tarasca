@@ -2,29 +2,44 @@
 
 ## Goal
 
-Add two ingestion channels to Tarasca: (1) share statement files from Android's share sheet into the app, (2) ingest credit-card-use notification emails automatically (~5 min polling) for near-real-time expense tracking, without duplicating rows when monthly statements are imported.
+Two ingestion channels: (1) Android share-sheet → Supabase Storage, (2) card-notification email ingest polled on a GitHub Actions cron, without duplicating rows when statements import.
 
 ## Status
 
-**Planned; implementation not started.** Plan written to `C:\Users\lauta\.opencode\plan\PLAN.md` (plan-mode constraint: plan files live there, not in `.agent/`).
+Mostly implemented. Gates green: `uv run pytest` 53 passed, `uv run ruff check src/ scripts/ tests/` clean, `uv run mypy src/` clean.
 
-## Planning discoveries (verified)
+## Done
 
-- `src/core/database.py::get_supabase_client()` is **broken for CI**: catches only `(ImportError, KeyError)`, but `st.secrets` raises `StreamlitSecretNotFoundError` when no secrets file exists → env-var fallback unreachable. Verified empirically (crashes even with env vars set). Fix first (Phase 0).
-- Streamlit Community Cloud sleeps apps after 12h without traffic → email poller must run outside the app → **GitHub Actions cron** (repo is public → free unlimited runners; min interval 5 min; offset minutes to avoid top-of-hour delays).
-- PWA share_target route rejected: open Chrome 153 regression drops shared files to installed PWAs + Streamlit can't inject `<link rel="manifest">` in head → **sideloaded Android app** is the primary phone path.
-- Supabase free tier: 1 GB storage / 50 MB per file / 500 MB DB; free projects pause after 1 week of inactivity (poller traffic should count as activity — verify early).
-- Storage security: private `imports` bucket, INSERT-only RLS policy for `anon` role; publishable key in APK can only add files, never read; app server uses secret key for list/download.
-- Repo is public → test fixtures must be synthetic/sanitized; `samples/` and `.streamlit/secrets.toml` already gitignored.
-- Existing patterns to reuse: `parse_file`/`classify_movement`/`categorize_transaction` for both new paths; `scripts/` entrypoints; `supabase_migration_NNN.sql` + `supabase_schema.sql` dual files.
-- Cross-source merge (email ↔ statement) is the riskiest logic: signature = (account, currency, abs(amount)) + date ±3 days, count-based pairing, description token guard; used by both import directions.
+- Phase 0: `get_supabase_client()` headless fallback (env vars) + `tests/test_database.py`.
+- Phone upload: `mobile/` Kotlin app, storage bucket migration, "Desde el teléfono" on Importar.
+- Email ingest: `src/core/email_templates.py`, `src/core/email_ingest.py`, `src/core/merging.py`, `scripts/poll_email.py`, `tests/test_email_ingest.py`, `.github/workflows/email-ingest.yml`.
+- Android build workflow `.github/workflows/build-android.yml` with `local.properties` written from repo secrets (never committed).
 
-## Recommended first implementation step
+## Open items
 
-Phase 0: fix `get_supabase_client()` env fallback in `src/core/database.py` (broaden except clause) + add a regression test. Small, unblocks everything headless. In parallel, user provides 2–3 sample notification `.eml` files into `samples/emails/` (needed before Phase 2 parser work).
+- [ ] Live verification of email ingest (PLAN 2.8) — dry-run via `workflow_dispatch`, then real insert.
+- [ ] Sideload APK + E2E phone share (PLAN 1.4).
+- [ ] README docs (PLAN 3.3).
 
-## Open decisions (user input needed)
+## Recent fixes (2026-10-06) — CI hangs/failures
 
-1. **Phone upload approach**: sideloaded Android app (recommended) vs email relay vs PWA attempt.
-2. **Mailbox**: where do card-use notifications arrive (Gmail IMAP + app password vs other IMAP)?
-3. **Merge behavior**: skip statement rows that match email rows (v1, recommended) vs also backfill `comprobante` metadata.
+Verified facts:
+
+- A wrong IMAP password fails in ~1s with `imaplib.IMAP4.error: [AUTHENTICATIONFAILED]`. It is **not** the cause of a hang; previously it escaped as a raw traceback.
+- `import streamlit` alone does not hang or print; the CORS banner comes from `.streamlit/config.toml` (`enableCORS = false`) being read when `st.secrets` is touched.
+- `postgrest` already applies a 120s HTTP timeout, so Supabase calls were not the hang.
+
+Changes:
+
+- `src/core/database.py`: never import Streamlit unless it is already in `sys.modules` (and a runtime exists). Headless runs go straight to env vars.
+- `src/core/email_ingest.py`: `IMAP_TIMEOUT_SECONDS = 60` on `IMAP4_SSL`; `MAX_MESSAGES_PER_RUN = 500`;
+  `INGEST_START_DATE = 2026-08-01` sent as an IMAP `SINCE` criterion (user: no need to ingest emails older than August — statements already cover them), so a first run never walks pre-August history.
+- **Root cause of the 6h hang**: first run has `last_uid=0` → `UID 1:*` matched the whole mailbox → sequential full-RFC822 FETCHes with no bound; `set_ingest_state` only runs after the loop, so a killed run never advanced the cursor and the next run restarted from zero.
+- `scripts/poll_email.py`: catches `imaplib.IMAP4.error` and `socket.timeout` with a one-line error; all prints flushed.
+- `.github/workflows/email-ingest.yml`: `timeout-minutes: 10`, `PYTHONUNBUFFERED: 1`.
+
+Note: if a run is killed before `set_ingest_state`, its batch is reprocessed next run; dedupe via `merge_with_existing` still prevents duplicate rows.
+
+## Next step
+
+Trigger `workflow_dispatch` on email-ingest and read the now-unbuffered output to confirm it completes under 10 minutes.

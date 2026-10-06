@@ -1,6 +1,7 @@
 """Tests for the email poller with a mocked IMAP mailbox."""
 
 import email
+from datetime import date
 from email import policy
 from pathlib import Path
 from unittest import mock
@@ -65,3 +66,77 @@ def test_poll_and_normalize_skips_non_matching():
 
     assert transactions == []
     assert last_uid == 101  # UID still advances
+
+
+def test_fetch_new_emails_caps_batch(monkeypatch):
+    """A first run must not FETCH the entire mailbox in one go."""
+
+    class FakeMail:
+        def __init__(self):
+            self.fetched = []
+
+        def login(self, user, password):
+            pass
+
+        def select(self, mailbox):
+            return ("OK", [b""])
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                big = b" ".join(str(u).encode() for u in range(1, 1001))
+                return ("OK", [big])
+            self.fetched.append(args[0])
+            return ("OK", [(None, b"raw")])
+
+        def logout(self):
+            pass
+
+    fake = FakeMail()
+    monkeypatch.setattr(email_ingest.imaplib, "IMAP4_SSL", lambda *a, **k: fake)
+
+    results = email_ingest.fetch_new_emails("host", "user", "pass", last_uid=0)
+
+    assert len(results) == email_ingest.MAX_MESSAGES_PER_RUN
+    assert len(fake.fetched) == email_ingest.MAX_MESSAGES_PER_RUN
+    # Oldest first, so the stored UID cursor advances monotonically
+    assert fake.fetched[0] == "1"
+    assert results[0][1] == 1
+
+
+def test_fetch_new_emails_limits_to_ingest_start(monkeypatch):
+    """Messages older than INGEST_START_DATE must never be fetched."""
+
+    class FakeMail:
+        def __init__(self):
+            self.search_args = None
+
+        def login(self, user, password):
+            pass
+
+        def select(self, mailbox):
+            return ("OK", [b""])
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                self.search_args = args
+                return ("OK", [b"101"])
+            return ("OK", [(None, b"raw")])
+
+        def logout(self):
+            pass
+
+    fake = FakeMail()
+    monkeypatch.setattr(email_ingest.imaplib, "IMAP4_SSL", lambda *a, **k: fake)
+
+    email_ingest.fetch_new_emails("host", "user", "pass", last_uid=0)
+
+    assert fake.search_args == (
+        "UID 1:*",
+        "SINCE 01-Aug-2026",
+    )
+
+
+def test_imap_date_format():
+    """IMAP requires DD-Mon-YYYY with an English month name."""
+    assert email_ingest._imap_date(date(2026, 8, 1)) == "01-Aug-2026"
+    assert email_ingest._imap_date(date(2026, 12, 31)) == "31-Dec-2026"

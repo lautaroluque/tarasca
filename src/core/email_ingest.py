@@ -7,7 +7,7 @@ track the last processed IMAP UID in the ingest_state table.
 
 import email
 import imaplib
-from datetime import datetime
+from datetime import date, datetime
 from email import policy
 from email.message import Message
 from email.utils import parsedate_to_datetime
@@ -26,6 +26,11 @@ ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 # connection blocks forever and the job hangs until the 6-hour CI limit.
 IMAP_TIMEOUT_SECONDS = 60
 
+# Nothing before this date is ingested: card notifications older than
+# August 2026 are already covered by imported statements. Sent to IMAP as
+# a SINCE search criterion, which matches on INTERNALDATE.
+INGEST_START_DATE = date(2026, 8, 1)
+
 # Maps the email's "Moneda" field to our currency codes
 MONEDA_TO_CURRENCY = {
     "PESOS": "ARS",
@@ -34,21 +39,69 @@ MONEDA_TO_CURRENCY = {
 }
 
 
+# Cap how many messages one run will FETCH. Each FETCH is a full RFC822
+# body, one round trip at a time, and the UID cursor is only stored after
+# the whole batch, so an unbounded run can outlive the job and make no
+# progress. Progress advances across runs: the caller stores the highest
+# UID seen, so the next scheduled run resumes where this one stopped.
+MAX_MESSAGES_PER_RUN = 500
+
+
+# English month abbreviations: IMAP requires them regardless of locale,
+# and strftime("%b") would emit the localized name on many machines.
+_IMAP_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _imap_date(d: date) -> str:
+    """Format a date the way IMAP wants it: 01-Aug-2026."""
+    return f"{d.day:02d}-{_IMAP_MONTHS[d.month - 1]}-{d.year}"
+
+
 def fetch_new_emails(
     host: str, user: str, password: str, last_uid: int = 0
 ) -> list[tuple[Message, int]]:
-    """Fetch emails with UID > last_uid via IMAP. Returns (message, uid) pairs."""
+    """Fetch emails with UID > last_uid via IMAP. Returns (message, uid) pairs.
+
+    Restricted to messages on or after INGEST_START_DATE, and fetches the
+    oldest matching messages first, up to MAX_MESSAGES_PER_RUN.
+    """
     mail = imaplib.IMAP4_SSL(host, timeout=IMAP_TIMEOUT_SECONDS)
     try:
         mail.login(user, password)
         mail.select("INBOX")
-        # IMAP UID search: "UID <from>:*" matches all UIDs >= from
-        _, data = mail.uid("SEARCH", f"UID {last_uid + 1}:*")
+        # IMAP UID search: "UID <from>:*" matches all UIDs >= from.
+        # IMAP joins criteria with an implicit AND, so SINCE narrows the
+        # same search rather than needing a second round trip.
+        _, data = mail.uid(
+            "SEARCH",
+            f"UID {last_uid + 1}:*",
+            f"SINCE {_imap_date(INGEST_START_DATE)}",
+        )
         raw_uids = data[0] if data else b""
         if isinstance(raw_uids, (bytes, bytearray)):
             uids = raw_uids.split()
         else:
             uids = []
+        if len(uids) > MAX_MESSAGES_PER_RUN:
+            print(
+                f"Mailbox has {len(uids)} new messages; "
+                f"fetching the oldest {MAX_MESSAGES_PER_RUN} this run.",
+                flush=True,
+            )
+            uids = uids[:MAX_MESSAGES_PER_RUN]
         results: list[tuple[Message, int]] = []
         for uid in uids:
             uid_str = uid.decode() if isinstance(uid, (bytes, bytearray)) else str(uid)

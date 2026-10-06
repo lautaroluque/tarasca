@@ -1,6 +1,7 @@
 """Database connection and CRUD operations for Tarasca using Supabase."""
 
 import os
+import sys
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -16,15 +17,15 @@ _supabase_client: Client | None = None
 def _credentials_from_streamlit_secrets() -> tuple[str | None, str | None]:
     """Read Supabase credentials from Streamlit secrets.
 
-    Returns (None, None) when not running inside a Streamlit runtime, so
-    headless callers (scripts/, CI) never import Streamlit. Importing it
-    outside a runtime emits CORS/XSRF warnings and can start background
-    threads that keep the process alive.
+    Returns (None, None) unless Streamlit is already loaded in this process,
+    so headless callers (scripts/, CI) never import it. Importing Streamlit
+    just to read secrets pulls the framework into headless runs, emits
+    config warnings, and can leave background threads behind.
     """
-    try:
-        import streamlit as st
-    except ImportError:
+    if "streamlit" not in sys.modules:
         return None, None
+
+    import streamlit as st
 
     if not st.runtime.exists():
         return None, None

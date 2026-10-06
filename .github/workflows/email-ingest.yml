@@ -23,6 +23,7 @@ jobs:
 
       - name: Poll notification emails
         env:
+          PYTHONUNBUFFERED: "1"
           IMAP_HOST: ${{ secrets.IMAP_HOST }}
           IMAP_USER: ${{ secrets.IMAP_USER }}
           IMAP_APP_PASSWORD: ${{ secrets.IMAP_APP_PASSWORD }}

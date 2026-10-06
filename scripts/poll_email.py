@@ -15,11 +15,13 @@ Usage:
 """
 
 import argparse
+import imaplib
 import os
+import socket
 import sys
 
 from src.core.database import create_transactions_bulk, get_categories
-from src.core.email_ingest import poll_and_normalize
+from src.core.email_ingest import IMAP_TIMEOUT_SECONDS, poll_and_normalize
 
 
 def main() -> None:
@@ -39,9 +41,23 @@ def main() -> None:
         print("ERROR: IMAP_USER and IMAP_APP_PASSWORD must be set", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Polling {host} as {user}...")
-    transactions, last_uid = poll_and_normalize(host, user, password)
-    print(f"Last UID: {last_uid}")
+    print(f"Polling {host} as {user}...", flush=True)
+    try:
+        transactions, last_uid = poll_and_normalize(host, user, password)
+    except imaplib.IMAP4.error as exc:
+        # Gmail answers a bad password with '[AUTHENTICATIONFAILED] Invalid
+        # credentials' in about a second. IMAP4.abort subclasses IMAP4.error,
+        # so mid-session drops land here too.
+        print(f"ERROR: IMAP request failed: {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    except (socket.timeout, TimeoutError) as exc:
+        print(
+            f"ERROR: IMAP timed out after {IMAP_TIMEOUT_SECONDS}s: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
+    print(f"Last UID: {last_uid}", flush=True)
 
     # Filter out transactions already in the database (idempotency)
     from datetime import timedelta
@@ -61,7 +77,7 @@ def main() -> None:
             print(f"Skipped {skipped} already tracked via statement")
 
     new_count = len(transactions)
-    print(f"New transactions: {new_count}")
+    print(f"New transactions: {new_count}", flush=True)
 
     if args.dry_run:
         for t in transactions:
