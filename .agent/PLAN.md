@@ -1,5 +1,12 @@
 # Implementation Plan: Phone Uploads + Real-Time Card Expenses
 
+> **Status 2026-10-06**: Phases 0–2 are implemented and pushed; the boxes below
+> were not ticked retroactively (this plan predates the current task and its
+> live state lives in `.agent/TASK.md`). Still open: PLAN 1.4 (sideload APK
+> E2E), 1.5, phase 3 (README), and the first real notification email landing as
+> a row. PLAN 2.8 verified: a `workflow_dispatch` run on `0253d79` finished in
+> 8m11s and wrote `ingest_state` (the 6-hour hang is gone).
+
 ## Goal
 
 Add two ingestion channels to Tarasca without changing the existing extract-import flow:
@@ -188,7 +195,7 @@ split does not describe a user who earns in USDT and spends in ARS.
 - [x] 3.3 Settings store `get_setting_json`/`set_setting_json` in `src/core/database.py`; `email_ingest` now delegates to it (no duplicated key/value code)
 - [ ] 3.4 User enters the real opening balances in the UI (combined total is negative until then: data starts 2026-01-01)
 - [x] 4.1 Delete `.agent/_*.py` scratch scripts before committing
-- [x] 4.2 Gates + commit (push only when asked)
+- [x] 4.2 Gates + commit/push (`83b58a3`, pushed together with `0253d79`)
 
 ## Acceptance criteria
 

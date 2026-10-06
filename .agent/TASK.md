@@ -12,13 +12,11 @@ lives in `.agent/PLAN.md`; its remaining open items are listed at the bottom.
 
 ## Status
 
-Code done, gates green (`uv run pytest` 64 passed, `uv run ruff check src/ scripts/ tests/`
-clean, `uv run mypy src/` clean). Verified headless against the real DB and via
-`AppTest` on both pages. Backfill applied (see Open items).
-
-Uncommitted: the working-tree changes below plus new `src/core/fx.py`,
-`scripts/backfill_own_account_transfers.py`, `tests/test_fx.py`.
-Last commit `0253d79` (email-ingest fix) is still unpushed.
+**Shipped.** Committed as `83b58a3` and pushed to `origin/main` together with the
+email-ingest fix `0253d79`. Gates green (`uv run pytest` 64 passed,
+`uv run ruff check src/ scripts/ tests/` clean, `uv run mypy src/` clean).
+Verified headless against the real DB and via `AppTest` on both pages.
+Backfill applied (see Open items).
 
 ## Done
 
@@ -56,8 +54,14 @@ Last commit `0253d79` (email-ingest fix) is still unpushed.
 - [ ] User enters real opening balances via Dashboard → "Editar saldos iniciales"
       (until then the combined total is negative: -5,260,408.18 ARS, because
       imported data starts 2026-01-01).
-- [ ] Push verification: email ingest `workflow_dispatch` dry-run (needs the
-      pushed commit), then a real insert.
+- [x] Push verification: on 2026-10-06 a `workflow_dispatch` run of **Email ingest**
+      on `0253d79` completed successfully in 8m11s (run 37503414702) and wrote
+      `ingest_state.imap_last_uid=51659` — the previous hang is gone. 0 new rows,
+      total row count unchanged (1579) → no duplicates. Note: the scheduled run
+      earlier that day was on `ae71f3b` (pre-fix) and hit the 10-minute
+      `timeout-minutes`; schedules now pick up the fixed code.
+- [ ] First real notification email landing as a `gasto` row within ~15 min
+      (PLAN 2.8 second half — nothing newer than 2026-08-19 in the mailbox yet).
 
 ## Measurements backing the design
 
